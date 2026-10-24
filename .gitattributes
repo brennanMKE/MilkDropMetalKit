@@ -1,0 +1,20 @@
+# Normalize text to LF in the repo
+* text=auto eol=lf
+
+*.swift text diff=swift
+*.h     text diff=cpp
+*.c     text diff=cpp
+*.metal text diff=cpp
+*.md    text diff=markdown
+
+# MilkDrop presets are Winamp-era files (often CRLF, often Windows-1252): keep their bytes exactly
+*.milk -text diff
+# HLSL shader sources extracted from presets
+*.hlsl  text diff=cpp
+
+# Binary assets: reference frames, audio clips, textures
+*.png      binary
+*.jpg      binary
+*.wav      binary
+*.caf      binary
+*.metallib binary

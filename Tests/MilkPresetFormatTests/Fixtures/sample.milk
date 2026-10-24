@@ -1,0 +1,35 @@
+[preset00]
+MILKDROP_PRESET_VERSION=201
+PSVERSION=2
+PSVERSION_WARP=2
+PSVERSION_COMP=3
+fRating=3.000000
+fGammaAdj=2.000000
+fDecay=0.980000
+nWaveMode=6
+zoom=1.010000
+rot=0.000000
+wave_r=0.650000
+wave_mode=2
+wavecode_0_enabled=1
+wavecode_0_samples=512
+wavecode_1_enabled=0
+wave_0_init1=t1 = 0;
+wave_0_per_frame1=r = 0.5 + 0.5*sin(time);
+wave_0_per_point1=x = sample;
+wave_0_per_point2=y = 0.5 + value1;
+shapecode_2_enabled=1
+shapecode_2_sides=5
+shape_2_per_frame1=ang = time;
+per_frame_init_1=q1 = 0;
+per_frame_1=zoom = zoom + 0.02*bass;
+per_frame_2=rot = rot + 0.01*sin(time);
+per_pixel_1=zoom = zoom + rad*0.01;
+warp_1=`shader_body
+warp_2=`{
+warp_3=`    ret = tex2D(sampler_main, uv).xyz;
+warp_4=`}
+comp_1=`shader_body
+comp_2=`{
+comp_3=`    ret = tex2D(sampler_main, uv).xyz * 1.2;
+comp_4=`}

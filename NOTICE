@@ -1,0 +1,9 @@
+MilkDropMetalKit
+
+No third-party code is included yet.
+
+Record here every source ported or adapted (handoff §3), with its licence text, before the code lands:
+- Butterchurn (https://github.com/jberg/butterchurn), MIT — primary port source.
+- Presets in Presets/: one entry per preset with author and licence.
+
+Do not copy from the 2024 Winamp source release (non-free licence) or from projectM (LGPL-2.1).
