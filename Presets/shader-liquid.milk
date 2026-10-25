@@ -1,0 +1,59 @@
+[preset00]
+MILKDROP_PRESET_VERSION=201
+fRating=3.000000
+fGammaAdj=1.500000
+fDecay=1.000000
+fVideoEchoZoom=1.000000
+fVideoEchoAlpha=0.000000
+nVideoEchoOrientation=0
+nWaveMode=0
+bAdditiveWaves=1
+bWaveDots=0
+bWaveThick=1
+bMaximizeWaveColor=1
+bTexWrap=0
+bBrighten=0
+bDarken=0
+bSolarize=0
+bInvert=0
+fWaveAlpha=0.700000
+fWaveScale=1.000000
+fWaveParam=-0.300000
+fWarpAnimSpeed=1.000000
+fWarpScale=1.000000
+fZoomExponent=1.000000
+zoom=1.000000
+rot=0.000000
+cx=0.500000
+cy=0.500000
+dx=0.000000
+dy=0.000000
+warp=0.000000
+sx=1.000000
+sy=1.000000
+wave_r=1.000000
+wave_g=1.000000
+wave_b=1.000000
+wave_x=0.500000
+wave_y=0.500000
+ob_size=0.010000
+ob_r=0.000000
+ob_g=0.000000
+ob_b=0.000000
+ob_a=0.000000
+ib_size=0.010000
+ib_r=0.250000
+ib_g=0.250000
+ib_b=0.250000
+ib_a=0.000000
+per_frame_1=wave_r = 0.5 + 0.5*sin(time*1.13 + 5.34);
+per_frame_2=wave_g = 0.5 + 0.5*sin(time*0.91 + 7.34);
+per_frame_3=wave_b = 0.5 + 0.5*sin(time*0.77 + 9.34);
+per_frame_4=zoom = 1.005;
+PSVERSION=2
+PSVERSION_WARP=2
+PSVERSION_COMP=2
+warp_1=`shader_body {
+warp_2=`    float2 flow = tex2D(sampler_noise_mq, uv * 0.4 + time * float2(0.013, 0.007)).xy - 0.5;
+warp_3=`    ret = tex2D(sampler_main, uv + flow * 0.006).xyz * 0.982 - 0.003;
+warp_4=`}

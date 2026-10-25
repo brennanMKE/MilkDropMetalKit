@@ -1,9 +1,42 @@
 MilkDropMetalKit
 
-No third-party code is included yet.
+Third-party sources ported or adapted (handoff §3). Record each one here, with its licence, before the code lands.
 
-Record here every source ported or adapted (handoff §3), with its licence text, before the code lands:
-- Butterchurn (https://github.com/jberg/butterchurn), MIT — primary port source.
-- Presets in Presets/: one entry per preset with author and licence.
+Butterchurn — https://github.com/jberg/butterchurn — MIT
+  Ported to Swift and Metal (structure, constants and formulas; no JavaScript or GLSL copied verbatim):
+  - Sources/MilkMetal/AudioAnalyzer.swift: waveform undersampling, the equalised FFT, bass/mid/treb bands and their
+    attack/release rates (audioProcessor.js, fft.js, audioLevels.js).
+  - Sources/MilkMetal/PresetRuntime.swift and CustomRuntimes.swift: the per-frame/per-vertex/custom wave/custom
+    shape equation flow, q and t variables, and the warp mesh (presetEquationRunner.js, renderer.js,
+    customWaveform.js, customShape.js).
+  - Sources/MilkMetal/Overlays.swift: built-in waveform modes 0–7, wave smoothing, motion vectors, borders and the
+    darkened centre (basicWaveform.js, waveUtils.js, motionVectors.js, border.js, darkenCenter.js).
+  - Sources/MilkMetal/Shaders.swift and MilkRenderer.swift: the default warp and composite (echo, gamma, hue
+    corners, filters), the blur passes and their weights, sizes and ranges (warp.js, comp.js, blur*.js).
+  - Sources/MilkMetal/NoiseTextures.swift: the noise textures (noise.js).
+  - Sources/MilkShaders/Prelude.swift: the uniforms a preset shader sees and their values.
+
+  MIT License
+
+  Copyright (c) 2013-2018 Jordan Berg
+
+  Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+  documentation files (the "Software"), to deal in the Software without restriction, including without limitation
+  the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+  permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+  The above copyright notice and this permission notice shall be included in all copies or substantial portions of
+  the Software.
+
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
+  WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS
+  OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+  OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+The HLSL-to-MSL translator (Sources/MilkShaders) is original. Its prelude follows MilkDrop 2's documented shader
+interface (sampler names, GetBlur1–3, lum, q1–q32, texsize, roam_*, rot_*).
+
+Presets in Presets/ were written for this package and are under its MIT licence (see Presets/README.md). Preset
+packs used for testing (Corpus/, git-ignored) are not redistributed.
 
 Do not copy from the 2024 Winamp source release (non-free licence) or from projectM (LGPL-2.1).

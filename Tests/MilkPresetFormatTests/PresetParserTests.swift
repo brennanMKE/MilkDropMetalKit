@@ -22,7 +22,7 @@ struct PresetParserTests {
     @Test func joinsEquationsInLineOrder() throws {
         let preset = try sample()
         #expect(preset.perFrameInit == "q1 = 0;")
-        #expect(preset.perFrame == "zoom = zoom + 0.02*bass;\nrot = rot + 0.01*sin(time);")
+        #expect(preset.perFrame == "zoom = zoom + 0.02*bass;rot = rot + 0.01*sin(time);")
         #expect(preset.perPixel == "zoom = zoom + rad*0.01;")
     }
 
@@ -33,7 +33,7 @@ struct PresetParserTests {
         #expect(preset.waves[0].values["samples"] == 512)
         #expect(preset.waves[0].initCode == "t1 = 0;")
         #expect(preset.waves[0].perFrame == "r = 0.5 + 0.5*sin(time);")
-        #expect(preset.waves[0].perPoint == "x = sample;\ny = 0.5 + value1;")
+        #expect(preset.waves[0].perPoint == "x = sample;y = 0.5 + value1;")
         #expect(!preset.waves[1].enabled)
         #expect(preset.shapes[2].enabled)
         #expect(preset.shapes[2].values["sides"] == 5)
@@ -48,7 +48,13 @@ struct PresetParserTests {
 
     @Test func numbersLinesNumericallyNotLexically() throws {
         let preset = try PresetModel(text: "per_frame_10=b=2;\nper_frame_2=a=1;\n")
-        #expect(preset.perFrame == "a=1;\nb=2;")
+        #expect(preset.perFrame == "a=1;b=2;")
+    }
+
+    /// MilkDrop concatenates equation lines with no separator, after dropping each line's `//` comment.
+    @Test func equationLinesJoinLikeMilkDrop() throws {
+        let preset = try PresetModel(text: "per_frame_1=x = above(treb, t\nper_frame_2=reb_att); // note\nper_frame_3=y=1;")
+        #expect(preset.perFrame == "x = above(treb, treb_att); y=1;")
     }
 
     @Test func milkDrop1FileHasNoShaders() throws {

@@ -6,8 +6,13 @@ and any macOS app can use it.
 
 The full design spec is [docs/handoff.md](docs/handoff.md).
 
-> **Status: scaffold (before milestone 1).** The `.milk` parser and the lock-free audio feed work. The expression
-> evaluator, the warp/composite pipeline, the shaders and the transitions are not built yet, so `render` clears to black.
+> **Status: milestones 1–4.** MilkDrop 1 and 2 presets render: the expression language (EEL), per-frame and
+> per-vertex equations, audio analysis, the warp mesh and feedback, all eight built-in waveforms, custom waves and
+> shapes (instanced and textured), motion vectors, borders, the composite, and MilkDrop 2 warp and composite shaders
+> translated from HLSL to Metal at load, with blur and noise textures. Over the 9,795-preset "Cream of the Crop"
+> pack, 99.8% of presets' equations compile and 99.97% of their 15,895 shaders translate and compile. Not yet:
+> transitions (milestone 5), disk textures that presets name (noise stands in), and a pixel-level comparison against
+> Butterchurn.
 
 ## Requirements
 
@@ -55,19 +60,45 @@ renderer.feed(samples: buffer, channels: 2, sampleRate: 48_000)
 
 | Product | Role | Status |
 |---|---|---|
-| `MilkMetal` | `MilkRenderer`, `MilkPreset`, `MilkView`, audio input and analysis | API in place; renders black |
+| `MilkMetal` | `MilkRenderer`, `MilkPreset`, `MilkView`, audio input and analysis | Working: the full MilkDrop 1 and 2 frame |
 | `MilkPresetFormat` | `.milk` → `PresetModel` (settings, equations, shader bodies). No Metal. | Working |
-| `MilkEEL` | ns-eel2 expression language → slot-resolved evaluator | Variable table and quirks only |
-| `MilkShaders` (internal) | MilkDrop HLSL prelude, translated MSL, pipeline cache | Placeholder |
-| `milkconvert` | Host CLI: `.milk` → preset bundle | `inspect` only |
+| `MilkEEL` | ns-eel2 expression language → slot-resolved closure tree | Working: full function set, `megabuf`, loops |
+| `MilkShaders` (internal) | MilkDrop 2 HLSL → Metal translator and the shader prelude | Working ([docs/shaders.md](docs/shaders.md)) |
+| `milkconvert` | Host CLI: check presets, translate shaders, write `.milkpreset` bundles | Working: `inspect`, `shaders`, `convert` |
+| `milkview-demo` | `MilkView` in a window, or offscreen frames, fed by a generated signal | Working |
+| `MilkDropGallery` | SwiftUI gallery app: presets by feature, plays an audio file | Working |
+
+## MilkDrop Gallery
+
+A SwiftUI app that steps through the presets in [Presets/](Presets/), each showing one renderer feature, with a
+note on what to look for. Open an audio file (or drop one on the window) and the visuals react to it; until then a
+built-in beat drives them silently. You can also add your own `.milk` files.
+
+```sh
+swift run MilkDropGallery          # run from the repo
+scripts/build-app.sh               # build/app/MilkDrop Gallery.app (universal, signed)
+scripts/make-dmg.sh                # build/dist/MilkDrop-Gallery-<version>.dmg, Developer ID signed
+scripts/make-dmg.sh --notary-profile <profile>   # also notarized and stapled, so it opens cleanly anywhere
+```
+
+Space plays and pauses, ⌘[ and ⌘] step through presets, ⌘I toggles the info card, and the timer button
+auto-advances every 20 seconds. It's also the reference for embedding `MilkView` in SwiftUI (`MilkDropView` in
+`Sources/MilkDropGallery/ContentView.swift`) and feeding it from AVAudioEngine (`AudioPlayer.swift`).
 
 ## Development
 
 ```sh
 swift build
-swift test
+scripts/run-tests-vm.sh                          # tests in a Tart VM
+scripts/run-tests-vm.sh --record 15 --preset Presets/spike-tunnel.milk   # plus a 15 s screen recording
 swift run milkconvert inspect path/to/presets/   # parse every .milk file and report failures
+swift run milkconvert shaders --compile path/to/presets/   # translate and compile every MilkDrop 2 shader
+swift run milkconvert convert --out Converted/ path/to/presets/   # write .milkpreset bundles
+python3 -I scripts/make-gallery-presets.py Presets   # regenerate the gallery presets
 ```
+
+Test automation (tests, golden images, screenshots, screen recordings) runs in a disposable Tart VM, never on
+the host. See [docs/testing-in-vm.md](docs/testing-in-vm.md).
 
 Reference checkouts go in `References/` and preset packs with unclear licences go in `Corpus/`. Both are git-ignored.
 Record any ported code in [NOTICE](NOTICE) before it lands. Butterchurn (MIT) is the port source. Do not copy from
@@ -75,10 +106,11 @@ projectM (LGPL) or from the 2024 Winamp source release.
 
 ## Roadmap
 
-1. **Spike**: one MilkDrop 1 preset, per-frame and per-vertex equations, warp and composite at 60 fps in `MilkView`.
-2. **EEL complete**: the full function set, `megabuf`, loops and quirks, with a corpus run.
-3. **Overlays**: waveforms, custom waves and shapes, borders, motion vectors.
-4. **MilkDrop 2 shaders**: HLSL → SPIR-V → MSL in `milkconvert`, plus blur and noise textures.
+1. **Spike** (done): one MilkDrop 1 preset, per-frame and per-vertex equations, warp and composite at 60 fps in `MilkView`.
+2. **EEL complete** (done): the full function set, `megabuf`, loops and quirks, with a corpus run.
+3. **Overlays** (done): waveforms, custom waves and shapes, borders, motion vectors.
+4. **MilkDrop 2 shaders** (done): HLSL → MSL, in the library at load and in `milkconvert` ahead of time, plus blur
+   and noise textures.
 5. **Transitions**: preset blending and the MilkDrop 2 blend patterns.
 6. **Compatibility**: corpus runs that track a pass rate.
 7. **1.0**: a stable, documented API and a tagged release.

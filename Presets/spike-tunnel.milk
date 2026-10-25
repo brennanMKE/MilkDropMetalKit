@@ -1,0 +1,52 @@
+[preset00]
+MILKDROP_PRESET_VERSION=100
+fRating=3.000000
+fGammaAdj=1.300000
+fDecay=0.930000
+fVideoEchoZoom=1.006000
+fVideoEchoAlpha=0.200000
+nVideoEchoOrientation=1
+nWaveMode=0
+bAdditiveWaves=1
+bWaveDots=0
+bWaveThick=1
+bMaximizeWaveColor=1
+bTexWrap=0
+fWaveAlpha=0.600000
+fWaveScale=1.300000
+fWaveParam=-0.150000
+fWarpAnimSpeed=1.000000
+fWarpScale=1.400000
+fZoomExponent=1.000000
+zoom=1.030000
+rot=0.000000
+cx=0.500000
+cy=0.500000
+dx=0.000000
+dy=0.000000
+warp=0.800000
+sx=1.000000
+sy=1.000000
+wave_r=1.000000
+wave_g=0.500000
+wave_b=0.200000
+wave_x=0.500000
+wave_y=0.500000
+ob_size=0.005000
+ob_r=0.100000
+ob_g=0.000000
+ob_b=0.300000
+ob_a=0.400000
+ib_size=0.000000
+ib_a=0.000000
+per_frame_init_1=q2 = 0;
+per_frame_1=wave_r = 0.5 + 0.5*sin(time*1.13);
+per_frame_2=wave_g = 0.5 + 0.5*sin(time*0.91 + 2);
+per_frame_3=wave_b = 0.5 + 0.5*sin(time*0.77 + 4);
+per_frame_4=zoom = 1.0 + 0.035*bass_att;
+per_frame_5=rot = 0.03*sin(time*0.31) + 0.02*(treb_att - 1);
+per_frame_6=q1 = 0.04*(bass - 1);
+per_frame_7=wave_mystery = -0.25 + 0.08*mid_att;
+per_frame_8=cx = 0.5 + 0.05*sin(time*0.47); cy = 0.5 + 0.05*cos(time*0.39);
+per_pixel_1=zoom = zoom + q1*(1 - rad) + 0.015*sin(rad*9 - time*2.3);
+per_pixel_2=rot = rot + 0.04*sin(ang*3 + time*0.8)*rad;

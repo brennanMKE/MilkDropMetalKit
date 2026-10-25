@@ -1,19 +1,19 @@
 /// Nullsoft EEL (ns-eel2), the expression language of MilkDrop equations.
 ///
-/// Plan (handoff §5.1): parse once at preset load into an AST, resolve every variable to a slot in a flat
-/// `[Double]` table, and compile to a closure tree or register bytecode. No string lookups per frame. Evaluation
-/// is deterministic for a given seed so golden-image tests are stable.
-///
-/// Status: API shape only. Milestone 1 fills in the lexer, parser and evaluator.
+/// Source is parsed once into an AST (`Parser`), every variable is resolved to a slot in a flat table, and the AST
+/// is compiled to a closure tree (`Compiler`) that reads and writes an `EELMemory`. No string lookups at run time.
+/// Evaluation is deterministic for a given seed so golden-image tests are stable.
 
-/// Variables of one evaluation context (a preset's per-frame state, a wave's per-point state, …).
-/// Names resolve to slots at compile time; programs read and write `values` by index.
+/// The variables of one evaluation context (a preset's equations, a wave's per-point code, …). Names resolve to
+/// slots at compile time. `values` holds each slot's initial value; `EELMemory` is the run-time storage.
 public struct EELVariableTable: Sendable {
     public private(set) var names: [String] = []
     public var values: [Double] = []
     private var slots: [String: Int] = [:]
 
     public init() {}
+
+    public var count: Int { names.count }
 
     /// The slot for `name` (case-insensitive, as in ns-eel2), created as 0 on first use.
     public mutating func slot(for name: String) -> Int {
@@ -26,37 +26,187 @@ public struct EELVariableTable: Sendable {
         return slot
     }
 
+    /// The slot for `name` if anything has used it.
+    public func existingSlot(for name: String) -> Int? {
+        slots[name.lowercased()]
+    }
+
     public subscript(name: String) -> Double {
         get { slots[name.lowercased()].map { values[$0] } ?? 0 }
         set { values[slot(for: name)] = newValue }
     }
 }
 
-public enum EELCompileError: Error, Equatable {
-    case notImplemented
+/// State every context of one preset shares: `gmegabuf` and the global registers `reg00`–`reg99`.
+/// Not thread-safe, like `EELMemory`.
+public final class EELShared: @unchecked Sendable {
+    public static let registerCount = 100
+    var gmegabuf = EELBuffer()
+    public let registers: UnsafeMutablePointer<Double>
+
+    public init() {
+        registers = .allocate(capacity: Self.registerCount)
+        registers.initialize(repeating: 0, count: Self.registerCount)
+    }
+
+    deinit {
+        registers.deallocate()
+        gmegabuf.free()
+    }
+
+    /// `reg07` → 7. Any other name → nil.
+    static func register(_ name: String) -> Int? {
+        let lower = name.lowercased()
+        guard lower.count == 5, lower.hasPrefix("reg"), let n = Int(lower.dropFirst(3)), n >= 0 else { return nil }
+        return n
+    }
+}
+
+/// Run-time storage for the slots of one `EELVariableTable`, plus the `rand` state and `megabuf`.
+/// Not thread-safe: one memory is used by one thread at a time.
+public final class EELMemory: @unchecked Sendable {
+    public let count: Int
+    public let values: UnsafeMutablePointer<Double>
+    /// SplitMix64 state for `rand`.
+    public var randomState: UInt64
+    /// `megabuf`, allocated in blocks on first write.
+    var megabuf = EELBuffer()
+    /// `gmegabuf` and the registers, shared with the preset's other contexts.
+    public let shared: EELShared
+
+    public init(table: EELVariableTable, seed: UInt64 = 1, shared: EELShared = EELShared()) {
+        count = table.count
+        values = .allocate(capacity: max(count, 1))
+        values.initialize(repeating: 0, count: max(count, 1))
+        for (i, v) in table.values.enumerated() { values[i] = v }
+        randomState = seed
+        self.shared = shared
+    }
+
+    deinit {
+        values.deallocate()
+        megabuf.free()
+    }
+
+    public subscript(slot: Int) -> Double {
+        get { values[slot] }
+        set { values[slot] = newValue }
+    }
+
+    /// Copies every slot from `other`, which must come from the same table.
+    public func copyValues(from other: EELMemory) {
+        precondition(other.count == count)
+        values.update(from: other.values, count: count)
+    }
+
+    func nextRandom() -> Double {
+        randomState &+= 0x9E37_79B9_7F4A_7C15
+        var z = randomState
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        z ^= z >> 31
+        return Double(z >> 11) / Double(1 << 53)
+    }
+}
+
+/// ns-eel2's 1M-entry buffers, allocated 64k entries at a time. The owning `EELMemory` frees the blocks.
+struct EELBuffer {
+    static let size = 1 << 20
+    static let blockSize = 1 << 16
+    private var blocks: [Int: UnsafeMutablePointer<Double>] = [:]
+
+    func read(_ index: Double) -> Double {
+        guard let i = Self.index(index), let block = blocks[i / Self.blockSize] else { return 0 }
+        return block[i % Self.blockSize]
+    }
+
+    mutating func write(_ index: Double, _ value: Double) {
+        guard let i = Self.index(index) else { return }
+        let b = i / Self.blockSize
+        let block: UnsafeMutablePointer<Double>
+        if let existing = blocks[b] {
+            block = existing
+        } else {
+            block = .allocate(capacity: Self.blockSize)
+            block.initialize(repeating: 0, count: Self.blockSize)
+            blocks[b] = block
+        }
+        block[i % Self.blockSize] = value
+    }
+
+    func free() {
+        for block in blocks.values { block.deallocate() }
+    }
+
+    private static func index(_ x: Double) -> Int? {
+        // ns-eel2 rounds the index (adds a small epsilon and truncates).
+        guard x.isFinite else { return nil }
+        let i = Int((x + 0.0001).rounded(.down))
+        return (0..<size).contains(i) ? i : nil
+    }
+}
+
+public enum EELCompileError: Error, Equatable, CustomStringConvertible {
     case syntax(message: String, offset: Int)
     case unknownFunction(String)
+    case wrongArgumentCount(function: String, expected: Int, got: Int)
+    case notAssignable(offset: Int)
+
+    public var description: String {
+        switch self {
+        case .syntax(let message, let offset): "syntax error at \(offset): \(message)"
+        case .unknownFunction(let name): "unknown function \(name)"
+        case .wrongArgumentCount(let f, let expected, let got): "\(f) takes \(expected) argument(s), got \(got)"
+        case .notAssignable(let offset): "assignment to something that is not a variable at \(offset)"
+        }
+    }
 }
 
 /// A compiled block of `;`-separated statements.
 public struct EELProgram: Sendable {
     public let source: String
+    let node: Compiler.Node?
 
     /// Compiles `source`, adding any variables it uses to `table`.
     public init(source: String, table: inout EELVariableTable) throws {
         self.source = source
-        if source.allSatisfy(\.isWhitespace) { return }
-        throw EELCompileError.notImplemented
+        var parser = try Parser(source: source)
+        guard let ast = try parser.parseProgram() else {
+            node = nil
+            return
+        }
+        node = try Compiler.compile(ast, table: &table)
     }
 
-    /// Runs the program against `values` (the table's storage).
-    public func run(_ values: inout [Double]) {}
+    public var isEmpty: Bool { node == nil }
+
+    /// Runs the program against `memory`, which must have been made from the table it was compiled with (or a
+    /// table that grew from it), and returns the value of the last statement.
+    @discardableResult
+    public func run(_ memory: EELMemory) -> Double {
+        node?(memory) ?? 0
+    }
 }
 
 /// Arithmetic rules presets depend on. Collect new ones here, each with a test, as they are found.
 public enum EELQuirks {
+    /// `equal`, `==`, `bnot` and truth tests use this tolerance.
+    public static let closeFactor = 0.00001
+
     /// `x / 0` is 0, not ±inf or NaN.
     @inlinable public static func divide(_ a: Double, _ b: Double) -> Double { b == 0 ? 0 : a / b }
-    /// `equal`, `above` and `below` compare with this tolerance.
-    public static let comparisonEpsilon = 0.00001
+
+    @inlinable public static func isTrue(_ x: Double) -> Bool { abs(x) >= closeFactor }
+
+    /// Truncates toward zero; non-finite values become 0 rather than trapping.
+    @inlinable public static func toInt(_ x: Double) -> Int64 {
+        guard x.isFinite else { return 0 }
+        return Int64(max(min(x, 9.0e18), -9.0e18))
+    }
+
+    /// Integer modulo; `x % 0` is 0.
+    @inlinable public static func modulo(_ a: Double, _ b: Double) -> Double {
+        let bi = toInt(b)
+        return bi == 0 ? 0 : Double(toInt(a) % bi)
+    }
 }

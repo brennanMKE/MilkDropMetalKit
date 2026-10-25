@@ -1,0 +1,264 @@
+{
+  "categories": [
+    {
+      "name": "Showcase",
+      "presets": [
+        {
+          "file": "spike-tunnel.milk",
+          "title": "Spike Tunnel",
+          "summary": "Everything at once: per-frame colour and zoom, per-vertex zoom and rotation, a thick additive circle wave, video echo and an outer border."
+        }
+      ]
+    },
+    {
+      "name": "Waveforms",
+      "presets": [
+        {
+          "file": "wave-circle.milk",
+          "title": "Mode 0: Circle",
+          "summary": "nWaveMode 0 bends the waveform into a ring. A slight zoom pushes each old frame outward, so the rings spread."
+        },
+        {
+          "file": "wave-scope.milk",
+          "title": "Mode 1: Radial Scope",
+          "summary": "nWaveMode 1: the right channel sets each point's distance from the centre and the left its angle, so the wave swirls around a ring."
+        },
+        {
+          "file": "wave-xy.milk",
+          "title": "Mode 2: XY Scope",
+          "summary": "nWaveMode 2 plots the left channel against the right, like an oscilloscope in X-Y mode, faintly. Mono sound is a diagonal line; stereo opens it up."
+        },
+        {
+          "file": "wave-xy-treble.milk",
+          "title": "Mode 3: XY Scope, Treble",
+          "summary": "nWaveMode 3 is the X-Y scope again, but treble sets its brightness: it flares on hi-hats and cymbals."
+        },
+        {
+          "file": "wave-momentum.milk",
+          "title": "Mode 4: Momentum Line",
+          "summary": "nWaveMode 4 draws a horizontal line whose points carry momentum from their neighbours, so it ripples like a rope. wave_mystery sets how much."
+        },
+        {
+          "file": "wave-products.milk",
+          "title": "Mode 5: Rotating Products",
+          "summary": "nWaveMode 5 multiplies the channels together into a slowly rotating knot."
+        },
+        {
+          "file": "wave-line.milk",
+          "title": "Mode 6: Angled Line",
+          "summary": "nWaveMode 6 draws a line across the screen at an angle set by wave_mystery. dy moves every frame up the screen, so the history scrolls like a waterfall."
+        },
+        {
+          "file": "wave-stereo.milk",
+          "title": "Mode 7: Stereo Lines",
+          "summary": "nWaveMode 7 draws the left channel above and the right below; wave_y sets the gap. sx above 1 stretches old frames sideways."
+        },
+        {
+          "file": "wave-dots.milk",
+          "title": "Dot Spiral",
+          "summary": "bWaveDots draws the circle wave as dots. Zoom and rotation turn the old dots into a spiral."
+        }
+      ]
+    },
+    {
+      "name": "Custom Waves",
+      "presets": [
+        {
+          "file": "custom-wave-spiral.milk",
+          "title": "Custom Wave: Spiral",
+          "summary": "A custom wave's per-point code places each of its samples. Here sample (0 to 1 along the wave) winds them into a spiral, and the audio in value1 makes it bristle."
+        },
+        {
+          "file": "custom-wave-spectrum.milk",
+          "title": "Custom Wave: Spectrum",
+          "summary": "bSpectrum gives a custom wave the frequency spectrum instead of the waveform: low notes on the left, high on the right. Two waves draw the left and right channels as mirrored bars of light."
+        },
+        {
+          "file": "custom-wave-dots.milk",
+          "title": "Custom Wave: Dots",
+          "summary": "bUseDots draws a custom wave's samples as points. Per-frame code sets t1, which every per-point run then reads."
+        }
+      ]
+    },
+    {
+      "name": "Custom Shapes",
+      "presets": [
+        {
+          "file": "shapes-basic.milk",
+          "title": "Shapes",
+          "summary": "Custom shapes are filled polygons with a centre colour, an edge colour and an outline. Here a hexagon breathes with the bass and a triangle spins with the treble."
+        },
+        {
+          "file": "shapes-instances.milk",
+          "title": "Shape Instances",
+          "summary": "num_inst draws a shape many times per frame; instance counts them so each copy can go somewhere else. Twenty-four copies of one shape make this ring."
+        },
+        {
+          "file": "shapes-textured.milk",
+          "title": "Textured Shape",
+          "summary": "A textured shape is filled with the previous frame. Turning its texture (tex_ang) and zooming into it (tex_zoom) folds the image back on itself."
+        }
+      ]
+    },
+    {
+      "name": "Motion Vectors",
+      "presets": [
+        {
+          "file": "motion-vectors.milk",
+          "title": "Motion Vectors",
+          "summary": "Motion vectors draw a grid of short lines showing where the warp is pulling each part of the image from. mv_x and mv_y set the grid, mv_l the length."
+        },
+        {
+          "file": "darken-center.milk",
+          "title": "Darken Centre",
+          "summary": "bDarkenCenter draws a faint dark spot in the middle every frame, so a zooming preset doesn't white out at its centre."
+        }
+      ]
+    },
+    {
+      "name": "Motion",
+      "presets": [
+        {
+          "file": "motion-zoom.milk",
+          "title": "Zoom",
+          "summary": "zoom above 1 magnifies the previous frame every frame, so everything flows outward. Here the bass drives it."
+        },
+        {
+          "file": "motion-zoom-exponent.milk",
+          "title": "Zoom Exponent",
+          "summary": "fZoomExponent bends the zoom by distance from the centre. Below 1 the middle races outward; above 1 the edges do. It sweeps slowly here."
+        },
+        {
+          "file": "motion-rotate.milk",
+          "title": "Rotation",
+          "summary": "rot turns the previous frame about (cx, cy) every frame. The centre wanders, so the spin swirls."
+        },
+        {
+          "file": "motion-warp.milk",
+          "title": "Warp",
+          "summary": "warp distorts the frame with MilkDrop's animated sine field. fWarpScale sets the size of its swirls and fWarpAnimSpeed their speed."
+        },
+        {
+          "file": "motion-stretch.milk",
+          "title": "Stretch",
+          "summary": "sx and sy scale the previous frame horizontally and vertically. Here they take turns."
+        },
+        {
+          "file": "motion-drift.milk",
+          "title": "Drift and Wrap",
+          "summary": "dx and dy slide the frame a little every frame. With bTexWrap on, whatever leaves one edge comes back on the other."
+        }
+      ]
+    },
+    {
+      "name": "Per-Vertex Equations",
+      "presets": [
+        {
+          "file": "pixel-ripples.milk",
+          "title": "Ripples",
+          "summary": "per_pixel code runs for every point of the warp mesh. Zoom depends on rad, the distance from the centre, so rings travel outward."
+        },
+        {
+          "file": "pixel-swirl.milk",
+          "title": "Swirl",
+          "summary": "Rotation that falls off with distance from the centre (rot depends on rad) twists the frame into a whirlpool."
+        },
+        {
+          "file": "pixel-petals.milk",
+          "title": "Petals",
+          "summary": "ang is each point's angle around the centre. Zoom that varies with ang pushes the image out in six petals."
+        }
+      ]
+    },
+    {
+      "name": "Composite",
+      "presets": [
+        {
+          "file": "echo.milk",
+          "title": "Video Echo",
+          "summary": "fVideoEchoAlpha blends a zoomed copy over the image and nVideoEchoOrientation mirrors it. The mirroring changes every 5 seconds."
+        },
+        {
+          "file": "filter-solarize.milk",
+          "title": "Solarize",
+          "summary": "bSolarize folds bright colours back down, so the brightest parts turn dark."
+        },
+        {
+          "file": "filter-invert.milk",
+          "title": "Invert",
+          "summary": "bInvert flips every colour: black becomes white."
+        },
+        {
+          "file": "filter-brighten.milk",
+          "title": "Brighten",
+          "summary": "bBrighten takes the square root of each colour, lifting the dim trails."
+        },
+        {
+          "file": "filter-darken.milk",
+          "title": "Darken",
+          "summary": "bDarken squares each colour: dim trails sink away and only the brightest lines stay."
+        },
+        {
+          "file": "gamma.milk",
+          "title": "Gamma",
+          "summary": "fGammaAdj multiplies the brightness of the final image. The bass drives it here."
+        },
+        {
+          "file": "borders.milk",
+          "title": "Borders",
+          "summary": "ob_ and ib_ draw an outer and an inner border every frame. Zooming out pulls the old ones inward into a tunnel of frames."
+        }
+      ]
+    },
+    {
+      "name": "MilkDrop 2 Shaders",
+      "presets": [
+        {
+          "file": "shader-liquid.milk",
+          "title": "Warp Shader: Liquid",
+          "summary": "A MilkDrop 2 warp shader replaces the fixed warp. Here each pixel samples the previous frame at an offset read from a smooth noise texture that drifts, so the image flows like liquid."
+        },
+        {
+          "file": "shader-palette.milk",
+          "title": "Composite Shader: Palette",
+          "summary": "A composite shader decides how the feedback image reaches the screen without changing what feeds back. This one maps brightness onto a cycling cosine palette."
+        },
+        {
+          "file": "shader-glow.milk",
+          "title": "Blur: Glow",
+          "summary": "MilkDrop 2 keeps three blurred copies of each frame for shaders to read. Adding GetBlur1 and GetBlur2 back onto the image gives it a soft glow."
+        },
+        {
+          "file": "shader-noise.milk",
+          "title": "Noise Textures",
+          "summary": "Shaders get MilkDrop's noise textures: 2D in three smoothnesses, and 3D volumes. Here a slice through the 3D noise, moving through time, tints and pushes the image."
+        },
+        {
+          "file": "shader-kaleidoscope.milk",
+          "title": "Composite Shader: Kaleidoscope",
+          "summary": "Mirroring the screen coordinates in the composite folds whatever the preset draws into eight-way symmetry, without touching the feedback underneath."
+        },
+        {
+          "file": "shader-edges.milk",
+          "title": "Composite Shader: Edges",
+          "summary": "texsize gives a shader the size of a pixel, so it can compare neighbours. The difference between them outlines every edge in neon."
+        }
+      ]
+    },
+    {
+      "name": "Audio",
+      "presets": [
+        {
+          "file": "audio-bands.milk",
+          "title": "Bass, Mid, Treble",
+          "summary": "bass, mid and treb are the band levels, where 1 is average. Bass sets the wave's red, mid its green and treble its blue; bass_att drives the zoom."
+        },
+        {
+          "file": "audio-beat.milk",
+          "title": "Beat Flash",
+          "summary": "Per-frame code can react to beats: when the bass jumps above its running average, the border flashes and the image kicks outward."
+        }
+      ]
+    }
+  ]
+}

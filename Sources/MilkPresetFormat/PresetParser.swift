@@ -126,22 +126,22 @@ private struct Parser {
             compositeShaderVersion: compSource.isEmpty ? 0 : Int(values["psversion_comp"] ?? Double(shaderVersion)),
             values: values,
             strings: strings,
-            perFrameInit: Self.joined(perFrameInit),
-            perFrame: Self.joined(perFrame),
-            perPixel: Self.joined(perPixel),
+            perFrameInit: Self.equations(perFrameInit),
+            perFrame: Self.equations(perFrame),
+            perPixel: Self.equations(perPixel),
             waves: (0..<PresetModel.customWaveCount).map {
                 CustomWave(
                     values: waveValues[$0],
-                    initCode: Self.joined(waveInit[$0]),
-                    perFrame: Self.joined(wavePerFrame[$0]),
-                    perPoint: Self.joined(wavePerPoint[$0])
+                    initCode: Self.equations(waveInit[$0]),
+                    perFrame: Self.equations(wavePerFrame[$0]),
+                    perPoint: Self.equations(wavePerPoint[$0])
                 )
             },
             shapes: (0..<PresetModel.customShapeCount).map {
                 CustomShape(
                     values: shapeValues[$0],
-                    initCode: Self.joined(shapeInit[$0]),
-                    perFrame: Self.joined(shapePerFrame[$0])
+                    initCode: Self.equations(shapeInit[$0]),
+                    perFrame: Self.equations(shapePerFrame[$0])
                 )
             },
             warpShader: warpSource.isEmpty ? nil : warpSource,
@@ -179,6 +179,14 @@ private struct Parser {
 
     static func joined(_ lines: Lines) -> String {
         lines.sorted { $0.key < $1.key }.map(\.value).joined(separator: "\n")
+    }
+
+    /// Equation lines the way MilkDrop joins them: each line's `//` comment removed, then concatenated with no
+    /// separator. Presets rely on it: a long expression wrapped across lines can split an identifier or number.
+    static func equations(_ lines: Lines) -> String {
+        lines.sorted { $0.key < $1.key }.map { line in
+            line.value.range(of: "//").map { String(line.value[..<$0.lowerBound]) } ?? line.value
+        }.joined()
     }
 }
 

@@ -1,0 +1,64 @@
+[preset00]
+MILKDROP_PRESET_VERSION=100
+fRating=3.000000
+fGammaAdj=1.500000
+fDecay=0.900000
+fVideoEchoZoom=1.000000
+fVideoEchoAlpha=0.000000
+nVideoEchoOrientation=0
+nWaveMode=0
+bAdditiveWaves=0
+bWaveDots=0
+bWaveThick=1
+bMaximizeWaveColor=1
+bTexWrap=0
+bBrighten=0
+bDarken=0
+bSolarize=0
+bInvert=0
+fWaveAlpha=0.000000
+fWaveScale=1.000000
+fWaveParam=0.000000
+fWarpAnimSpeed=1.000000
+fWarpScale=1.000000
+fZoomExponent=1.000000
+zoom=1.000000
+rot=0.000000
+cx=0.500000
+cy=0.500000
+dx=0.000000
+dy=0.000000
+warp=0.000000
+sx=1.000000
+sy=1.000000
+wave_r=1.000000
+wave_g=1.000000
+wave_b=1.000000
+wave_x=0.500000
+wave_y=0.500000
+ob_size=0.010000
+ob_r=0.000000
+ob_g=0.000000
+ob_b=0.000000
+ob_a=0.000000
+ib_size=0.010000
+ib_r=0.250000
+ib_g=0.250000
+ib_b=0.250000
+ib_a=0.000000
+per_frame_1=rot = 0.01;
+wavecode_0_enabled=1
+wavecode_0_samples=512
+wavecode_0_bAdditive=1
+wavecode_0_scaling=1.000000
+wavecode_0_smoothing=0.500000
+wavecode_0_r=1.000000
+wavecode_0_g=1.000000
+wavecode_0_b=1.000000
+wavecode_0_a=0.900000
+wave_0_per_frame1=t1 = time*0.7;
+wave_0_per_point1=r0 = 0.05 + sample*0.4 + value1*0.6;
+wave_0_per_point2=a0 = sample*24 + t1;
+wave_0_per_point3=x = 0.5 + r0*cos(a0);
+wave_0_per_point4=y = 0.5 + r0*sin(a0);
+wave_0_per_point5=r = 0.5 + 0.5*sin(sample*6 + time); g = 0.5 + 0.5*sin(sample*6 + time + 2); b = 0.5 + 0.5*sin(sample*6 + time + 4);
