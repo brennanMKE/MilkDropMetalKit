@@ -6,13 +6,13 @@ and any macOS app can use it.
 
 The full design spec is [docs/handoff.md](docs/handoff.md).
 
-> **Status: milestones 1–4.** MilkDrop 1 and 2 presets render: the expression language (EEL), per-frame and
+> **Status: milestones 1–5.** MilkDrop 1 and 2 presets render: the expression language (EEL), per-frame and
 > per-vertex equations, audio analysis, the warp mesh and feedback, all eight built-in waveforms, custom waves and
 > shapes (instanced and textured), motion vectors, borders, the composite, and MilkDrop 2 warp and composite shaders
-> translated from HLSL to Metal at load, with blur and noise textures. Over the 9,795-preset "Cream of the Crop"
-> pack, 99.8% of presets' equations compile and 99.97% of their 15,895 shaders translate and compile. Not yet:
-> transitions (milestone 5), disk textures that presets name (noise stands in), and a pixel-level comparison against
-> Butterchurn.
+> translated from HLSL to Metal at load, with blur and noise textures. Presets blend into each other with MilkDrop 2's
+> transitions (wipe, plasma and radial patterns, or a plain crossfade). Over the 9,795-preset "Cream of the Crop"
+> pack, 99.8% of presets' equations compile and 99.97% of their 15,895 shaders translate and compile. Not yet: disk
+> textures that presets name (noise stands in), and a pixel-level comparison against Butterchurn.
 
 ## Requirements
 
@@ -46,6 +46,9 @@ let device = MTLCreateSystemDefaultDevice()!
 let renderer = try MilkRenderer(device: device, pixelFormat: .bgra8Unorm)
 try renderer.load(MilkPreset(contentsOf: presetURL))
 
+// Later: blend into the next preset over 2.7 seconds, in a random MilkDrop 2 pattern (see `transitionPattern`).
+try renderer.load(MilkPreset(contentsOf: nextURL), transition: 2.7)
+
 // A ready-made view: CAMetalLayer plus a display link. The host owns windows, menus and preset browsing.
 let view = try MilkView(renderer: renderer)
 
@@ -72,7 +75,8 @@ renderer.feed(samples: buffer, channels: 2, sampleRate: 48_000)
 
 A SwiftUI app that steps through the presets in [Presets/](Presets/), each showing one renderer feature, with a
 note on what to look for. Open an audio file (or drop one on the window) and the visuals react to it; until then a
-built-in beat drives them silently. You can also add your own `.milk` files.
+built-in beat drives them silently. Each preset you pick blends in over the last one. You can also add your own
+`.milk` files.
 
 ```sh
 swift run MilkDropGallery          # run from the repo
@@ -91,6 +95,7 @@ auto-advances every 20 seconds. It's also the reference for embedding `MilkView`
 swift build
 scripts/run-tests-vm.sh                          # tests in a Tart VM
 scripts/run-tests-vm.sh --record 15 --preset Presets/spike-tunnel.milk   # plus a 15 s screen recording
+scripts/run-tests-vm.sh --frames --every 10 --preset Presets/echo.milk --next Presets/shader-glow.milk   # a transition
 swift run milkconvert inspect path/to/presets/   # parse every .milk file and report failures
 swift run milkconvert shaders --compile path/to/presets/   # translate and compile every MilkDrop 2 shader
 swift run milkconvert convert --out Converted/ path/to/presets/   # write .milkpreset bundles
@@ -111,7 +116,7 @@ projectM (LGPL) or from the 2024 Winamp source release.
 3. **Overlays** (done): waveforms, custom waves and shapes, borders, motion vectors.
 4. **MilkDrop 2 shaders** (done): HLSL → MSL, in the library at load and in `milkconvert` ahead of time, plus blur
    and noise textures.
-5. **Transitions**: preset blending and the MilkDrop 2 blend patterns.
+5. **Transitions** (done): preset blending and the MilkDrop 2 blend patterns.
 6. **Compatibility**: corpus runs that track a pass rate.
 7. **1.0**: a stable, documented API and a tagged release.
 

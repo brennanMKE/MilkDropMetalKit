@@ -17,6 +17,7 @@
 #   --corpus DIR    also render every .milk under DIR (any host path, e.g. Corpus/…) with --frames; the files are
 #                   copied into the run's snapshot, never committed
 #   --count N, --every K, --size WxH   frames options (default 300, 30, 1280x720)
+#   --next PATH     after 2 s of each capture, blend into this preset (relative to the repo) over 2.7 s
 #
 # In the guest, in order:
 #   build      swift build --build-tests, and a release build of milkview-demo (a failure skips everything below)
@@ -35,6 +36,7 @@ RECORD=0
 APP=0
 CORPUS=""
 PRESET=""
+NEXT=""
 COUNT=300 EVERY=30 FRAME_SIZE=1280x720
 args=("$@")
 while (( $#args )); do
@@ -50,6 +52,7 @@ while (( $#args )); do
     --every) EVERY=${args[1]:-}; shift args 2>/dev/null; [[ "$EVERY" == <1-100000> ]] || { print -r -- "--every needs a number" >&2; exit 2 } ;;
     --size) FRAME_SIZE=${args[1]:-}; shift args 2>/dev/null; [[ "$FRAME_SIZE" == <1-8192>x<1-8192> ]] || { print -r -- "--size needs WxH" >&2; exit 2 } ;;
     --preset) PRESET=${args[1]:-}; shift args 2>/dev/null; [[ -n "$PRESET" ]] || { print -r -- "--preset needs a path" >&2; exit 2 } ;;
+    --next) NEXT=${args[1]:-}; shift args 2>/dev/null; [[ -n "$NEXT" ]] || { print -r -- "--next needs a path" >&2; exit 2 } ;;
     -h|--help) awk 'NR > 1 { if (!/^#/) exit; print }' "$0"; exit 0 ;;
     *) print -r -- "unknown option: $arg" >&2; exit 2 ;;
   esac
@@ -57,6 +60,7 @@ done
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 [[ -z "$PRESET" || -e "$REPO/$PRESET" ]] || { print -r -- "--preset: no file $REPO/$PRESET" >&2; exit 2 }
+[[ -z "$NEXT" || -f "$REPO/$NEXT" ]] || { print -r -- "--next: no file $REPO/$NEXT" >&2; exit 2 }
 # Presets to render offscreen; the window steps use the first.
 PRESETS=()
 if [[ -n "$PRESET" && -d "$REPO/$PRESET" ]]; then
@@ -239,6 +243,7 @@ run_step() {   # run_step name cmd [build]
 DEMO_BIN=".build/release/milkview-demo"
 preset_arg=""
 [[ -n "$PRESET" ]] && preset_arg="--preset ${(q)PRESET}"
+[[ -n "$NEXT" ]] && preset_arg+=" --next ${(q)NEXT}"
 
 run_step build "swift build --build-tests && swift build -c release --product milkview-demo" build
 run_step tests "swift test --skip-build"
@@ -248,7 +253,7 @@ if (( FRAMES )); then
   frames_cmd="bad=0; "
   for p in ${PRESETS:-""}; do
     name=${${p:t:r}:-default}
-    frames_cmd+="$DEMO_BIN frames ${p:+--preset ${(q)p}} --out $GUEST_RESULTS/frames/${(q)name} --count $COUNT --every $EVERY --size $FRAME_SIZE || { echo \"frames failed: ${(q)name}\"; bad=1; }; "
+    frames_cmd+="$DEMO_BIN frames ${p:+--preset ${(q)p}} ${NEXT:+--next ${(q)NEXT}} --out $GUEST_RESULTS/frames/${(q)name} --count $COUNT --every $EVERY --size $FRAME_SIZE || { echo \"frames failed: ${(q)name}\"; bad=1; }; "
   done
   run_step frames "${frames_cmd}exit \$bad"
 fi

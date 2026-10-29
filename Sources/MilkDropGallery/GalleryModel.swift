@@ -39,6 +39,8 @@ private struct Manifest: Decodable {
 final class GalleryModel {
     static let addedSection = "Your Presets"
     static let advanceInterval: Duration = .seconds(20)
+    /// Seconds each newly selected preset takes to blend in.
+    static let transitionTime: TimeInterval = 2.7
 
     let renderer: MilkRenderer?
     let audio: AudioPlayer
@@ -98,7 +100,8 @@ final class GalleryModel {
         guard let id, let renderer else { return }
         selection = id
         do {
-            try renderer.load(MilkPreset(contentsOf: id))
+            // The first preset cuts in; after that each one blends in over the last.
+            try renderer.load(MilkPreset(contentsOf: id), transition: renderer.preset == nil ? 0 : Self.transitionTime)
             presetErrors = renderer.presetErrors
             // Shader compile errors arrive once the background compile finishes.
             Task { [weak self] in

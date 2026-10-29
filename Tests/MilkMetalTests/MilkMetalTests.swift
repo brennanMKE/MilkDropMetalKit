@@ -352,3 +352,127 @@ struct MilkRendererTests {
         #expect(throws: MilkRendererError.self) { try MilkRenderer(device: device, pixelFormat: .r8Unorm) }
     }
 }
+
+@MainActor
+struct TransitionTests {
+    private let meshSize = (width: 48, height: 36)
+    private let aspect = Aspect(width: 1600, height: 900)
+
+    /// Every pattern starts on the outgoing preset and ends on the incoming one at every vertex.
+    @Test(arguments: MilkTransitionPattern.allCases)
+    func patternRunsFromOldToNew(_ kind: MilkTransitionPattern) {
+        var random = SplitMix(seed: 7)
+        let pattern = BlendPattern(kind, meshSize: meshSize, aspect: aspect, random: &random)
+        let count = 49 * 37
+        #expect((0..<count).allSatisfy { pattern.weight($0, progress: 0) < 0.0001 })
+        #expect((0..<count).allSatisfy { pattern.weight($0, progress: 1) > 0.9999 })
+        let middle = Set((0..<count).map { pattern.weight($0, progress: 0.5) })
+        if kind == .crossfade {
+            #expect(middle == [0.5])
+        } else {
+            #expect(middle.count > 1, "\(kind) switches everywhere at once")
+        }
+    }
+
+    @Test func settingsEaseAndSwitchesSnapHalfway() {
+        var old = FrameState(), new = FrameState()
+        old.decay = 0.9
+        new.decay = 1
+        old.invert = true
+        old.waveMode = 3
+        new.waveMode = 5
+        #expect(FrameState.mixed(from: old, to: new, progress: 0).decay == 0.9)
+        #expect(abs(FrameState.mixed(from: old, to: new, progress: 0.5).decay - 0.95) < 1e-9)
+        #expect(FrameState.mixed(from: old, to: new, progress: 1).decay == 1)
+        #expect(FrameState.mixed(from: old, to: new, progress: 0.45).invert)
+        #expect(!FrameState.mixed(from: old, to: new, progress: 0.55).invert)
+        #expect(FrameState.mixed(from: old, to: new, progress: 0.1).waveMode == 5)
+    }
+
+    @Test func basicWaveMorphsBetweenModes() {
+        let old = OverlayBuilder.BasicWave(points: (0..<10).map { [0, Double($0)] }, alpha: 0.2)
+        let new = OverlayBuilder.BasicWave(points: (0..<20).map { [1, Double($0) / 2] }, alpha: 1)
+        let start = OverlayBuilder.morph(from: old, oldMode: 2, to: new, mode: 4, progress: 0)
+        #expect(start.points.allSatisfy { $0.x == 0 })
+        #expect(start.alpha == 0.2)
+        let end = OverlayBuilder.morph(from: old, oldMode: 2, to: new, mode: 4, progress: 1)
+        #expect(end.points == new.points)
+        #expect(end.alpha == 1)
+    }
+
+    private func solid(_ rgb: String) throws -> MilkPreset {
+        MilkPreset(name: rgb, model: try PresetModel(text: "[preset00]\ncomp_1=`shader_body { ret = float3(\(rgb)); }"))
+    }
+
+    /// Renders frames `range` at 60 fps; returns the first pixel (BGRA) of the last.
+    private func render(_ renderer: MilkRenderer, frames range: Range<Int>, into texture: MTLTexture,
+                        queue: MTLCommandQueue) throws -> [UInt8] {
+        for frame in range {
+            let commandBuffer = try #require(queue.makeCommandBuffer())
+            renderer.render(to: texture, commandBuffer: commandBuffer, time: Double(frame) / 60)
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+        }
+        var pixel = [UInt8](repeating: 0, count: 4)
+        texture.getBytes(&pixel, bytesPerRow: texture.width * 4, from: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0)
+        return pixel
+    }
+
+    private func setUp() throws -> (MilkRenderer, MTLTexture, MTLCommandQueue) {
+        let device = try #require(MTLCreateSystemDefaultDevice())
+        let renderer = try MilkRenderer(device: device, pixelFormat: .bgra8Unorm)
+        renderer.compilesShadersInBackground = false
+        let descriptor = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .bgra8Unorm, width: 32, height: 32, mipmapped: false)
+        descriptor.usage = [.renderTarget, .shaderRead]
+        descriptor.storageMode = .shared
+        return (renderer, try #require(device.makeTexture(descriptor: descriptor)),
+                try #require(device.makeCommandQueue()))
+    }
+
+    @Test func crossfadeBlendsTheCompositesThenFinishes() throws {
+        let (renderer, texture, queue) = try setUp()
+        renderer.transitionPattern = .crossfade
+        try renderer.load(solid("1, 0, 0"), transition: 0.5)
+        #expect(!renderer.isTransitioning, "the first preset cuts in")
+        #expect(try render(renderer, frames: 0..<10, into: texture, queue: queue) == [0, 0, 255, 255])
+
+        // The transition starts at frame 10 and lasts 30 frames: halfway at frame 25.
+        try renderer.load(solid("0, 0, 1"), transition: 0.5)
+        #expect(renderer.isTransitioning)
+        let middle = try render(renderer, frames: 10..<26, into: texture, queue: queue)
+        #expect((120...135).contains(middle[0]) && (120...135).contains(middle[2]), "\(middle)")
+        #expect(renderer.isTransitioning)
+
+        #expect(try render(renderer, frames: 26..<45, into: texture, queue: queue) == [255, 0, 0, 255])
+        #expect(!renderer.isTransitioning)
+    }
+
+    @Test func noTransitionIsACut() throws {
+        let (renderer, texture, queue) = try setUp()
+        try renderer.load(solid("1, 0, 0"))
+        _ = try render(renderer, frames: 0..<3, into: texture, queue: queue)
+        try renderer.load(solid("0, 0, 1"))
+        #expect(!renderer.isTransitioning)
+        #expect(try render(renderer, frames: 3..<4, into: texture, queue: queue) == [255, 0, 0, 255])
+    }
+
+    /// Two gallery presets with waves, shapes and shaders, through a random pattern, twice: same pixels.
+    @Test func transitionsAreDeterministic() throws {
+        func run() throws -> [UInt8] {
+            let (renderer, texture, queue) = try setUp()
+            let presets = repoRoot.appendingPathComponent("Presets")
+            try renderer.load(MilkPreset(contentsOf: presets.appendingPathComponent("spike-tunnel.milk")))
+            _ = try render(renderer, frames: 0..<20, into: texture, queue: queue)
+            let files = try FileManager.default.contentsOfDirectory(at: presets, includingPropertiesForKeys: nil)
+                .filter { $0.pathExtension == "milk" }.sorted { $0.path < $1.path }
+            try renderer.load(MilkPreset(contentsOf: try #require(files.last)), transition: 1)
+            _ = try render(renderer, frames: 20..<50, into: texture, queue: queue)
+            #expect(renderer.isTransitioning)
+            var pixels = [UInt8](repeating: 0, count: 32 * 32 * 4)
+            texture.getBytes(&pixels, bytesPerRow: 32 * 4, from: MTLRegionMake2D(0, 0, 32, 32), mipmapLevel: 0)
+            return pixels
+        }
+        #expect(try run() == run())
+    }
+}

@@ -14,6 +14,10 @@ import UniformTypeIdentifiers
 //       "window <CGWindowID> <x> <y> <w> <h>" once it is on screen, and quits after N seconds (default 10)
 //   milkview-demo frames --out DIR [--preset P] [--count N] [--every K] [--size WxH]
 //       renders N frames (default 300) at a fixed 60 fps clock and writes every Kth (default 30) as DIR/NNNN.png
+//
+// Both window and frames take [--next P2 [--switch-at T] [--transition S] [--pattern NAME]]: at T seconds
+// (default 2) load P2 with an S second transition (default 2.7) in pattern NAME (random, crossfade, wipe, plasma,
+// radial; default random).
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data(("milkview-demo: " + message + "\n").utf8))
@@ -31,6 +35,10 @@ struct Options {
     var out: URL?
     var count = 300
     var every = 30
+    var next: URL?
+    var switchAt = 2.0
+    var transition = 2.7
+    var pattern = MilkTransitionPattern.random
 
     init(_ arguments: [String]) {
         var args = arguments[...]
@@ -53,6 +61,15 @@ struct Options {
             case "--out": out = URL(fileURLWithPath: value(flag))
             case "--count": count = Int(value(flag)) ?? count
             case "--every": every = max(1, Int(value(flag)) ?? every)
+            case "--next": next = URL(fileURLWithPath: value(flag))
+            case "--switch-at": switchAt = Double(value(flag)) ?? switchAt
+            case "--transition": transition = Double(value(flag)) ?? transition
+            case "--pattern":
+                let name = value(flag)
+                guard let p = MilkTransitionPattern.allCases.first(where: { "\($0)" == name }) else {
+                    fail("unknown pattern \(name)")
+                }
+                pattern = p
             default: fail("unknown option \(flag)")
             }
         }
@@ -70,8 +87,21 @@ func makeRenderer(pixelFormat: MTLPixelFormat) -> MilkRenderer {
         renderer.compilesShadersInBackground = false
         if let url = options.preset { try renderer.load(MilkPreset(contentsOf: url)) }
         for error in renderer.presetErrors { print("preset: \(error)") }
+        renderer.transitionPattern = options.pattern
         print("device \(device.name)")
         return renderer
+    } catch {
+        fail("\(error)")
+    }
+}
+
+/// Loads `--next` with the transition, once.
+@MainActor
+func switchToNext(_ renderer: MilkRenderer) {
+    guard let url = options.next else { return }
+    do {
+        try renderer.load(MilkPreset(contentsOf: url), transition: options.transition)
+        for error in renderer.presetErrors { print("next preset: \(error)") }
     } catch {
         fail("\(error)")
     }
@@ -100,8 +130,10 @@ func renderFrames() {
     defer { buffer.deallocate() }
     var pixels = [UInt8](repeating: 0, count: options.width * options.height * 4)
     let start = Date()
+    let switchFrame = Int((options.switchAt * fps).rounded())
 
     for frame in 0..<options.count {
+        if frame == switchFrame { switchToNext(renderer) }
         synth.render(into: buffer, frames: samplesPerFrame)
         renderer.feed(samples: UnsafeBufferPointer(buffer), channels: 2, sampleRate: synth.sampleRate)
         guard let commandBuffer = queue.makeCommandBuffer() else { fail("no command buffer") }
@@ -167,6 +199,7 @@ final class DemoApp: NSObject, NSApplicationDelegate {
             print("window \(window.windowNumber) \(Int(options.originX)) \(Int(options.originY)) \(options.width) \(options.height)")
             fflush(stdout)
         }
+        DispatchQueue.main.asyncAfter(deadline: .now() + options.switchAt) { switchToNext(renderer) }
         DispatchQueue.main.asyncAfter(deadline: .now() + options.seconds) { NSApp.terminate(nil) }
     }
 

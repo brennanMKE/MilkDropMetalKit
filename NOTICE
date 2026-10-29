@@ -14,6 +14,9 @@ Butterchurn — https://github.com/jberg/butterchurn — MIT
   - Sources/MilkMetal/Shaders.swift and MilkRenderer.swift: the default warp and composite (echo, gamma, hue
     corners, filters), the blur passes and their weights, sizes and ranges (warp.js, comp.js, blur*.js).
   - Sources/MilkMetal/NoiseTextures.swift: the noise textures (noise.js).
+  - Sources/MilkMetal/Transitions.swift, MilkRenderer.swift and Overlays.swift: the blend patterns, the mixing of
+    frame settings and the warp mesh during a transition, and the built-in waveform's morph between modes
+    (blendPattern.js, renderer.js, basicWaveform.js).
   - Sources/MilkShaders/Prelude.swift: the uniforms a preset shader sees and their values.
 
   MIT License

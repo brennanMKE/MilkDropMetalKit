@@ -18,28 +18,38 @@ public enum MilkRendererError: Error, Equatable {
 /// the warp pass from the previous feedback texture into the next; the blur levels the preset's shaders read;
 /// motion vectors, custom shapes, custom waves, the built-in waveform, the darkened centre and the borders on top;
 /// then the composite to `texture`. A MilkDrop 2 preset's warp and composite shaders, translated to Metal at load,
-/// replace the fixed-function warp and composite. Not yet: transitions.
+/// replace the fixed-function warp and composite.
+///
+/// A transition (`load(_:transition:)`) runs both presets' equations each frame. The incoming preset takes over
+/// vertex by vertex in a blend pattern: the warp mesh, the warp pass and the composite are mixed per vertex, frame
+/// settings ease across, and each preset's custom waves and shapes fade with it.
 @MainActor
 public final class MilkRenderer {
     public let device: MTLDevice
     public let pixelFormat: MTLPixelFormat
-    public private(set) var preset: MilkPreset?
+    /// The current preset; during a transition, the incoming one.
+    public var preset: MilkPreset? { active.preset }
     /// Problems with the current preset: equation blocks that didn't compile (they're skipped), shaders that didn't
     /// translate or compile (the fixed-function warp or composite runs instead), and disk textures it names that
     /// aren't available. Compile errors can arrive shortly after `load` when shaders compile in the background.
     public var presetErrors: [String] {
-        var errors = runtime.errors + shaders.errors
+        let shaders = active.shaders
+        var errors = active.runtime.errors + shaders.errors
         if !shaders.missingTextures.isEmpty {
             errors.append("textures not available, noise used instead: \(shaders.missingTextures.joined(separator: ", "))")
         }
         return errors
     }
+    /// The pattern the next transitions use. MilkDrop 2 picks one at random each time (`.random`, the default).
+    public var transitionPattern = MilkTransitionPattern.random
+    /// True from a `load` with a transition until the outgoing preset has gone.
+    public var isTransitioning: Bool { transition != nil }
     /// Compile preset shaders in the background (the default), so loading never stalls drawing; the fixed-function
     /// passes stand in for the fraction of a second it takes. Offscreen rendering that must be reproducible sets this
     /// to false.
     public var compilesShadersInBackground = true
     /// True while the current preset's shaders are still compiling.
-    public var isCompilingShaders: Bool { shaders.isCompiling }
+    public var isCompilingShaders: Bool { active.shaders.isCompiling }
     /// The warp mesh resolution in cells; MilkDrop's default is 48×36.
     public var meshSize: (width: Int, height: Int) = (48, 36) {
         didSet {
@@ -61,6 +71,8 @@ public final class MilkRenderer {
     private let overlayPipelines: [OverlayKey: MTLRenderPipelineState]
     private let compositePipeline: MTLRenderPipelineState
     private let blurPipelines: (horizontal: MTLRenderPipelineState, vertical: MTLRenderPipelineState)
+    /// Lays a transition's incoming warp or composite over the outgoing one, weighted per vertex.
+    private let blendPipelines: (feedback: MTLRenderPipelineState, output: MTLRenderPipelineState)
     let samplers: Samplers
     private let inFlight = DispatchSemaphore(value: MilkRenderer.framesInFlight)
     private var frameSlots: [FrameSlot] = []
@@ -71,25 +83,54 @@ public final class MilkRenderer {
     private var current = 0
     private(set) var blur = BlurTextures()
     private let noise: NoiseTextures
-    private var shaders = PresetShaders.none
     private let pipelineCache = PipelineCache()
 
     private let analyzer = AudioAnalyzer()
-    private var runtime: PresetRuntime
+    private var active: LoadedPreset
+    private var transition: Transition?
+    /// The outgoing preset's mesh during a transition, before it's mixed into the frame slot's.
+    private var outgoingMesh: [MeshVertex] = []
+    /// What a transition's incoming warp and composite render into before they're blended over the outgoing ones.
+    private var scratch: (warp: MTLTexture, composite: MTLTexture)?
     private var overlays = OverlayBuilder()
     private var frame = 0
     private var lastTime: TimeInterval?
     private var fps = 60.0
-    /// Random per preset, for the composite's hue corners (Butterchurn's `rand_start`).
-    private var randStart: SIMD4<Double> = [0, 0, 0, 0]
-    /// Random per preset, for shaders (`rand_preset`) and the axes of the `rot_*` matrices.
-    private var randPreset: SIMD4<Double> = [0, 0, 0, 0]
-    private var rotationAxes: [SIMD3<Double>] = []
     private var random = SplitMix(seed: 1)
+
+    /// A preset with its compiled equations and shaders, and the randomness drawn for it at load.
+    private struct LoadedPreset {
+        var preset: MilkPreset?
+        var runtime: PresetRuntime
+        var shaders: PresetShaders
+        /// For the composite's hue corners (Butterchurn's `rand_start`).
+        var randStart: SIMD4<Double>
+        /// For shaders (`rand_preset`) and the axes of the `rot_*` matrices.
+        var randPreset: SIMD4<Double>
+        var rotationAxes: [SIMD3<Double>]
+    }
+
+    private struct Transition {
+        var outgoing: LoadedPreset
+        var duration: TimeInterval
+        /// Set by the first frame rendered after `load`, since `load` doesn't know the clock.
+        var start: TimeInterval?
+        /// Made by the first frame too, for its mesh size and aspect ratio.
+        var pattern: BlendPattern?
+    }
+
+    /// A frame of a transition in progress.
+    private struct Blend {
+        var outgoing: LoadedPreset
+        var state: FrameState
+        var progress: Double
+    }
 
     private struct FrameSlot {
         var mesh: MTLBuffer
         var overlay: MTLBuffer
+        /// The incoming preset's weight at each mesh vertex during a transition.
+        var weights: MTLBuffer
     }
 
     struct OverlayKey: Hashable {
@@ -124,7 +165,8 @@ public final class MilkRenderer {
             throw MilkRendererError.shaderCompilation("\(error)")
         }
         func pipeline(_ vertex: String, _ fragment: String, format: MTLPixelFormat,
-                      blend: (MTLBlendFactor, MTLBlendFactor)? = nil) throws -> MTLRenderPipelineState {
+                      blend: (MTLBlendFactor, MTLBlendFactor)? = nil,
+                      keepAlpha: Bool = false) throws -> MTLRenderPipelineState {
             let d = MTLRenderPipelineDescriptor()
             d.label = fragment
             d.vertexFunction = library.makeFunction(name: vertex)
@@ -135,8 +177,8 @@ public final class MilkRenderer {
                 a.isBlendingEnabled = true
                 a.sourceRGBBlendFactor = source
                 a.destinationRGBBlendFactor = destination
-                a.sourceAlphaBlendFactor = source
-                a.destinationAlphaBlendFactor = destination
+                a.sourceAlphaBlendFactor = keepAlpha ? .zero : source
+                a.destinationAlphaBlendFactor = keepAlpha ? .one : destination
             }
             do {
                 return try device.makeRenderPipelineState(descriptor: d)
@@ -162,6 +204,11 @@ public final class MilkRenderer {
         compositePipeline = try pipeline("quad_vertex", "composite_fragment", format: pixelFormat)
         blurPipelines = (try pipeline("quad_vertex", "blur_horizontal_fragment", format: Self.feedbackFormat),
                          try pipeline("quad_vertex", "blur_vertical_fragment", format: Self.feedbackFormat))
+        // The feedback's alpha stays 1: textured shapes multiply by it.
+        blendPipelines = (try pipeline("blend_vertex", "blend_fragment", format: Self.feedbackFormat,
+                                       blend: (.sourceAlpha, .oneMinusSourceAlpha), keepAlpha: true),
+                          try pipeline("blend_vertex", "blend_fragment", format: pixelFormat,
+                                       blend: (.sourceAlpha, .oneMinusSourceAlpha), keepAlpha: true))
 
         func sampler(_ filter: MTLSamplerMinMagFilter, _ mode: MTLSamplerAddressMode) throws -> MTLSamplerState {
             let d = MTLSamplerDescriptor()
@@ -178,14 +225,17 @@ public final class MilkRenderer {
         samplers = Samplers(linearWrap: try sampler(.linear, .repeat), linearClamp: try sampler(.linear, .clampToEdge),
                             pointWrap: try sampler(.nearest, .repeat), pointClamp: try sampler(.nearest, .clampToEdge))
         noise = try NoiseTextures(device: device)
-        runtime = PresetRuntime(model: PresetModel())
-        newPresetRandomness()
+        active = LoadedPreset(preset: nil, runtime: PresetRuntime(model: PresetModel()), shaders: .none,
+                              randStart: .zero, randPreset: .zero, rotationAxes: [])
+        active = loaded(nil, runtime: active.runtime, shaders: .none)
     }
 
-    private func newPresetRandomness() {
-        randStart = random.vector()
-        randPreset = random.vector()
-        rotationAxes = (0..<24).map { _ in SIMD3(random.unit() - 0.5, random.unit() - 0.5, random.unit() - 0.5) }
+    private func loaded(_ preset: MilkPreset?, runtime: PresetRuntime, shaders: PresetShaders) -> LoadedPreset {
+        let randStart = random.vector()
+        let randPreset = random.vector()
+        let axes = (0..<24).map { _ in SIMD3(random.unit() - 0.5, random.unit() - 0.5, random.unit() - 0.5) }
+        return LoadedPreset(preset: preset, runtime: runtime, shaders: shaders, randStart: randStart,
+                            randPreset: randPreset, rotationAxes: axes)
     }
 
     /// Formats a `CAMetalLayer` accepts, which is what hosts render into.
@@ -200,14 +250,20 @@ public final class MilkRenderer {
     }
 
     /// Switches to `preset`. Equations that don't compile are skipped and listed in `presetErrors`.
-    /// The feedback image carries over, as in MilkDrop; blended transitions come later.
+    ///
+    /// With a `transition` of more than 0 seconds the current preset keeps running and hands over to the new one
+    /// in `transitionPattern` over that time (a few seconds is typical); otherwise the switch is a cut.
+    /// Either way the feedback image carries over, as in MilkDrop. Loading during a transition makes the preset
+    /// that was coming in the outgoing one.
     public func load(_ preset: MilkPreset, transition: TimeInterval = 0) throws {
-        runtime = PresetRuntime(model: preset.model, seed: random.next())
-        shaders = PresetShaders(preset: preset, device: device, warpFormat: Self.feedbackFormat,
-                                compositeFormat: pixelFormat, cache: pipelineCache,
-                                synchronous: !compilesShadersInBackground)
-        newPresetRandomness()
-        self.preset = preset
+        let runtime = PresetRuntime(model: preset.model, seed: random.next())
+        let shaders = PresetShaders(preset: preset, device: device, warpFormat: Self.feedbackFormat,
+                                    compositeFormat: pixelFormat, cache: pipelineCache,
+                                    synchronous: !compilesShadersInBackground)
+        let outgoing = active
+        active = loaded(preset, runtime: runtime, shaders: shaders)
+        self.transition = transition > 0 && outgoing.preset != nil
+            ? Transition(outgoing: outgoing, duration: transition) : nil
     }
 
     /// Renders one frame into `texture` (e.g. a `CAMetalLayer` drawable's) at `time` seconds.
@@ -236,25 +292,22 @@ public final class MilkRenderer {
         // Equations.
         let inputs = FrameInputs(time: time, fps: fps, frame: frame, levels: analyzer.levels, mesh: meshSize,
                                  pixels: (width, height), aspect: Aspect(width: width, height: height))
-        let state = runtime.runFrame(inputs)
+        var state = active.runtime.runFrame(inputs)
         let (gw, gh) = meshSize
-        let mesh = slot.mesh.contents().bindMemory(to: MeshVertex.self, capacity: (gw + 1) * (gh + 1))
-        runtime.computeMesh(inputs, into: mesh)
+        let vertexCount = (gw + 1) * (gh + 1)
+        let mesh = slot.mesh.contents().bindMemory(to: MeshVertex.self, capacity: vertexCount)
+        active.runtime.computeMesh(inputs, into: mesh)
+        let blend = blendFrame(inputs, mesh: mesh, weights: slot.weights)
+        if let blend { state = FrameState.mixed(from: blend.state, to: state, progress: blend.progress) }
         frame += 1
 
-        // Overlays, in MilkDrop's order.
+        // Overlays, in MilkDrop's order. During a transition each preset's shapes and waves fade with it.
         overlays.reset(width: width, height: height, aspect: inputs.aspect)
         overlays.addMotionVectors(state, mesh: mesh, meshSize: meshSize)
-        for shape in runtime.shapes {
-            for instance in shape.run(inputs, q: runtime.qAfterFrame) { overlays.addShape(instance) }
-        }
-        let waveScale = runtime.waveScale
-        for wave in runtime.waves {
-            if let points = wave.run(inputs, q: runtime.qAfterFrame, audio: analyzer, waveScale: waveScale) {
-                overlays.addCustomWave(points, dots: wave.usesDots, thick: wave.isThick, additive: wave.isAdditive)
-            }
-        }
-        overlays.addBasicWave(state, left: analyzer.waveLeft, right: analyzer.waveRight)
+        addCustomOverlays(active, inputs, alpha: blend?.progress ?? 1)
+        if let blend { addCustomOverlays(blend.outgoing, inputs, alpha: 1 - blend.progress) }
+        overlays.addBasicWave(state, left: analyzer.waveLeft, right: analyzer.waveRight,
+                              oldMode: blend?.state.waveMode, progress: blend?.progress ?? 1)
         overlays.addDarkenCenter(state)
         overlays.addBorders(state)
         let overlayBuffer = overlayBuffer(for: slot, count: overlays.vertices.count)
@@ -263,33 +316,150 @@ public final class MilkRenderer {
             overlayBuffer.contents().copyMemory(from: base, byteCount: raw.count)
         }
 
-        // Warp into the next feedback texture, blur it, then draw the overlays on top.
+        // Warp into the next feedback texture, blur it, then draw the overlays on top. In a transition the
+        // outgoing preset warps first and the incoming one is laid over it.
         let previous = feedback[current]
         current = 1 - current
         let target = feedback[current]
-        let uniforms = shaders.warp != nil || shaders.composite != nil
-            ? shaderUniforms(state, inputs, width: width, height: height) : []
-        if let warp = shaders.warp {
-            encodeShaderPass(commandBuffer, warp, main: previous, into: target, uniforms: uniforms, state: state,
-                             mesh: slot.mesh)
+        let uniforms = shaderUniforms(active, state, blur: state, inputs, width: width, height: height)
+        var outgoingUniforms: [SIMD4<Float>] = []
+        var blurLevel = active.shaders.blurLevel
+        if let blend, let scratch = scratchTextures(width: width, height: height) {
+            outgoingUniforms = shaderUniforms(blend.outgoing, blend.state, blur: state, inputs, width: width,
+                                              height: height)
+            blurLevel = max(blurLevel, blend.outgoing.shaders.blurLevel)
+            encodeWarpPass(commandBuffer, blend.outgoing, state: blend.state, uniforms: outgoingUniforms,
+                           from: previous, into: target, mesh: slot.mesh)
+            encodeWarpPass(commandBuffer, active, state: state, uniforms: uniforms, from: previous,
+                           into: scratch.warp, mesh: slot.mesh)
+            encodeBlend(commandBuffer, scratch.warp, over: target, mesh: slot.mesh, weights: slot.weights,
+                        pipeline: blendPipelines.feedback)
         } else {
-            encodeWarp(commandBuffer, from: previous, into: target, mesh: slot.mesh, state: state)
+            encodeWarpPass(commandBuffer, active, state: state, uniforms: uniforms, from: previous, into: target,
+                           mesh: slot.mesh)
         }
-        if shaders.blurLevel > 0 {
-            encodeBlur(commandBuffer, from: target, levels: shaders.blurLevel, state: state)
+        if blurLevel > 0 {
+            encodeBlur(commandBuffer, from: target, levels: blurLevel, state: state)
         }
         encodeOverlays(commandBuffer, into: target, previous: previous, buffer: overlayBuffer)
 
         // Composite to the caller's texture.
-        if let composite = shaders.composite {
-            encodeShaderPass(commandBuffer, composite, main: target, into: texture, uniforms: uniforms, state: state,
-                             mesh: nil)
+        if let blend, let scratch = scratchTextures(width: width, height: height) {
+            encodeCompositePass(commandBuffer, blend.outgoing, state: blend.state, uniforms: outgoingUniforms,
+                                from: target, into: texture)
+            encodeCompositePass(commandBuffer, active, state: state, uniforms: uniforms, from: target,
+                                into: scratch.composite)
+            encodeBlend(commandBuffer, scratch.composite, over: texture, mesh: slot.mesh, weights: slot.weights,
+                        pipeline: blendPipelines.output)
         } else {
-            encodeComposite(commandBuffer, from: target, into: texture, state: state)
+            encodeCompositePass(commandBuffer, active, state: state, uniforms: uniforms, from: target, into: texture)
         }
     }
 
+    // MARK: Transitions
+
+    /// Advances the transition, if there is one: runs the outgoing preset's equations, mixes its mesh into `mesh`
+    /// by the blend pattern and writes each vertex's incoming weight to `weights`. Nil when not transitioning.
+    private func blendFrame(_ inputs: FrameInputs, mesh: UnsafeMutablePointer<MeshVertex>,
+                            weights: MTLBuffer) -> Blend? {
+        guard var t = transition else { return nil }
+        let start = t.start ?? inputs.time
+        let progress = (inputs.time - start) / t.duration
+        guard progress < 1 else {
+            transition = nil
+            return nil
+        }
+        t.start = start
+        let pattern: BlendPattern
+        if let p = t.pattern, p.meshSize == inputs.mesh, p.aspect == inputs.aspect {
+            pattern = p
+        } else {
+            pattern = BlendPattern(transitionPattern, meshSize: inputs.mesh, aspect: inputs.aspect, random: &random)
+            t.pattern = pattern
+        }
+        transition = t
+
+        let state = t.outgoing.runtime.runFrame(inputs)
+        let count = (inputs.mesh.width + 1) * (inputs.mesh.height + 1)
+        if outgoingMesh.count != count {
+            outgoingMesh = [MeshVertex](repeating: MeshVertex(x: 0, y: 0, u: 0, v: 0), count: count)
+        }
+        outgoingMesh.withUnsafeMutableBufferPointer { t.outgoing.runtime.computeMesh(inputs, into: $0.baseAddress!) }
+        let w = weights.contents().bindMemory(to: Float.self, capacity: count)
+        for i in 0..<count {
+            let weight = pattern.weight(i, progress: max(progress, 0))
+            let old = outgoingMesh[i]
+            mesh[i].u = mesh[i].u * weight + old.u * (1 - weight)
+            mesh[i].v = mesh[i].v * weight + old.v * (1 - weight)
+            w[i] = weight
+        }
+        return Blend(outgoing: t.outgoing, state: state, progress: max(progress, 0))
+    }
+
+    /// A preset's custom shapes, then its custom waves, with their alpha scaled by `alpha`.
+    private func addCustomOverlays(_ p: LoadedPreset, _ inputs: FrameInputs, alpha: Double) {
+        let runtime = p.runtime
+        for shape in runtime.shapes {
+            for instance in shape.run(inputs, q: runtime.qAfterFrame, alpha: alpha) { overlays.addShape(instance) }
+        }
+        for wave in runtime.waves {
+            if let points = wave.run(inputs, q: runtime.qAfterFrame, audio: analyzer, waveScale: runtime.waveScale,
+                                     alpha: alpha) {
+                overlays.addCustomWave(points, dots: wave.usesDots, thick: wave.isThick, additive: wave.isAdditive)
+            }
+        }
+    }
+
+    /// Draws `incoming` over `target` through the mesh, each vertex weighted by the incoming preset's share.
+    private func encodeBlend(_ commandBuffer: MTLCommandBuffer, _ incoming: MTLTexture, over target: MTLTexture,
+                             mesh: MTLBuffer, weights: MTLBuffer, pipeline: MTLRenderPipelineState) {
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = target
+        pass.colorAttachments[0].loadAction = .load
+        pass.colorAttachments[0].storeAction = .store
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass), let indexBuffer else { return }
+        encoder.label = "MilkRenderer.blend"
+        encoder.setRenderPipelineState(pipeline)
+        encoder.setVertexBuffer(mesh, offset: 0, index: 0)
+        encoder.setVertexBuffer(weights, offset: 0, index: 1)
+        encoder.setFragmentTexture(incoming, index: 0)
+        encoder.drawIndexedPrimitives(type: .triangle, indexCount: indexCount, indexType: .uint32,
+                                      indexBuffer: indexBuffer, indexBufferOffset: 0)
+        encoder.endEncoding()
+    }
+
+    /// Render targets the size of the screen for a transition's incoming passes, made on first use.
+    private func scratchTextures(width: Int, height: Int) -> (warp: MTLTexture, composite: MTLTexture)? {
+        if let scratch, scratch.warp.width == width, scratch.warp.height == height { return scratch }
+        scratch = try? (makeTarget(width: width, height: height, label: "transitionWarp"),
+                        makeTarget(width: width, height: height, label: "transitionComposite", format: pixelFormat))
+        return scratch
+    }
+
     // MARK: Passes
+
+    /// A preset's warp: its shader if it has one, otherwise the fixed-function pass.
+    private func encodeWarpPass(_ commandBuffer: MTLCommandBuffer, _ p: LoadedPreset, state: FrameState,
+                                uniforms: [SIMD4<Float>], from previous: MTLTexture, into target: MTLTexture,
+                                mesh: MTLBuffer) {
+        if let warp = p.shaders.warp {
+            encodeShaderPass(commandBuffer, warp, main: previous, into: target, uniforms: uniforms, state: state,
+                             mesh: mesh)
+        } else {
+            encodeWarp(commandBuffer, from: previous, into: target, mesh: mesh, state: state)
+        }
+    }
+
+    /// A preset's composite: its shader if it has one, otherwise the fixed-function pass.
+    private func encodeCompositePass(_ commandBuffer: MTLCommandBuffer, _ p: LoadedPreset, state: FrameState,
+                                     uniforms: [SIMD4<Float>], from source: MTLTexture, into texture: MTLTexture) {
+        if let composite = p.shaders.composite {
+            encodeShaderPass(commandBuffer, composite, main: source, into: texture, uniforms: uniforms, state: state,
+                             mesh: nil)
+        } else {
+            encodeComposite(commandBuffer, from: source, into: texture, state: state, randStart: p.randStart)
+        }
+    }
 
     private func encodeWarp(_ commandBuffer: MTLCommandBuffer, from previous: MTLTexture, into target: MTLTexture,
                             mesh: MTLBuffer, state: FrameState) {
@@ -348,7 +518,7 @@ public final class MilkRenderer {
     }
 
     private func encodeComposite(_ commandBuffer: MTLCommandBuffer, from source: MTLTexture, into texture: MTLTexture,
-                                 state: FrameState) {
+                                 state: FrameState, randStart: SIMD4<Double>) {
         let pass = MTLRenderPassDescriptor()
         pass.colorAttachments[0].texture = texture
         pass.colorAttachments[0].loadAction = .dontCare
@@ -401,8 +571,11 @@ public final class MilkRenderer {
         encoder.endEncoding()
     }
 
-    /// Everything translated shaders read: `MilkShaderUniforms`, then the `rot_*` matrices.
-    private func shaderUniforms(_ s: FrameState, _ inputs: FrameInputs, width: Int, height: Int) -> [SIMD4<Float>] {
+    /// Everything `p`'s translated shaders read: `MilkShaderUniforms`, then the `rot_*` matrices. Empty when it has
+    /// no shaders. The blur ranges come from `blur`, the settings the blur textures were made with.
+    private func shaderUniforms(_ p: LoadedPreset, _ s: FrameState, blur: FrameState, _ inputs: FrameInputs,
+                                width: Int, height: Int) -> [SIMD4<Float>] {
+        guard p.shaders.warp != nil || p.shaders.composite != nil else { return [] }
         var u = MilkShaderUniforms()
         func f(_ x: Double) -> Float { Float(x) }
         let l = s.levels
@@ -411,9 +584,9 @@ public final class MilkRenderer {
         u.c2 = [f(l.bassAtt), f(l.midAtt), f(l.trebAtt), f((l.bassAtt + l.midAtt + l.trebAtt) / 3)]
         u.aspect = [f(inputs.aspect.x), f(inputs.aspect.y), f(1 / inputs.aspect.x), f(1 / inputs.aspect.y)]
         u.texsize = [Float(width), Float(height), 1 / Float(width), 1 / Float(height)]
-        u.setQ(runtime.qAfterFrame)
+        u.setQ(p.runtime.qAfterFrame)
         u.randFrame = SIMD4<Float>(random.vector())
-        u.randPreset = SIMD4<Float>(randPreset)
+        u.randPreset = SIMD4<Float>(p.randPreset)
         let t = s.time
         func roam(_ rates: [Double], _ f: (Double) -> Double) -> SIMD4<Float> {
             SIMD4(rates.map { Float(0.5 + 0.5 * f(t * $0)) })
@@ -422,7 +595,7 @@ public final class MilkRenderer {
         u.slowRoamSin = roam([0.005, 0.008, 0.013, 0.022], sin)
         u.roamCos = roam([0.3, 1.3, 5.0, 20.0], cos)
         u.roamSin = roam([0.3, 1.3, 5.0, 20.0], sin)
-        let (mins, maxs) = Self.blurRange(s)
+        let (mins, maxs) = Self.blurRange(blur)
         u.blurMin = [f(mins[0]), f(mins[1]), f(mins[2]), f(s.decay)]
         u.blurMax = [f(maxs[0]), f(maxs[1]), f(maxs[2]), 0]
         u.blurScale = [f(maxs[0] - mins[0]), f(maxs[1] - mins[1]), f(maxs[2] - mins[2]), 0]
@@ -431,14 +604,14 @@ public final class MilkRenderer {
         u.texsizeNoise = (size(256), size(32), size(256), size(256), size(32), size(32))
         let user = size(Float(noise.mq.width))
         u.texsizeUser = (user, user, user, user, user, user, user, user)
-        let hue = Self.hueCorners(time: s.time, randStart: randStart)
+        let hue = Self.hueCorners(time: s.time, randStart: p.randStart)
         u.hue = (hue[0], hue[1], hue[2], hue[3])
 
         var out = [SIMD4<Float>](repeating: .zero, count: MemoryLayout<MilkShaderUniforms>.stride / 16)
         out.withUnsafeMutableBytes { raw in
             withUnsafeBytes(of: u) { raw.copyMemory(from: $0) }
         }
-        out += MilkShaderUniforms.rotationMatrices(time: t, axes: rotationAxes,
+        out += MilkShaderUniforms.rotationMatrices(time: t, axes: p.rotationAxes,
                                                    frameRandom: [random.unit(), random.unit(), random.unit(), random.unit()])
         return out
     }
@@ -554,9 +727,11 @@ public final class MilkRenderer {
                 guard let mesh = device.makeBuffer(length: vertexCount * MemoryLayout<MeshVertex>.stride,
                                                    options: .storageModeShared),
                       let overlay = device.makeBuffer(length: 65_536 * MemoryLayout<OverlayVertex>.stride,
+                                                      options: .storageModeShared),
+                      let weights = device.makeBuffer(length: vertexCount * MemoryLayout<Float>.stride,
                                                       options: .storageModeShared)
                 else { throw MilkRendererError.resourceCreation("vertex buffers") }
-                return FrameSlot(mesh: mesh, overlay: overlay)
+                return FrameSlot(mesh: mesh, overlay: overlay, weights: weights)
             }
             slotIndex = 0
         }
@@ -581,8 +756,9 @@ public final class MilkRenderer {
         }
     }
 
-    func makeTarget(width: Int, height: Int, label: String) throws -> MTLTexture {
-        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: Self.feedbackFormat, width: width,
+    func makeTarget(width: Int, height: Int, label: String,
+                    format: MTLPixelFormat = MilkRenderer.feedbackFormat) throws -> MTLTexture {
+        let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: format, width: width,
                                                          height: height, mipmapped: false)
         d.usage = [.renderTarget, .shaderRead]
         d.storageMode = .private

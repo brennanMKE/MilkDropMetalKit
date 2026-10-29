@@ -173,8 +173,11 @@ struct OverlayBuilder {
 
     // MARK: Built-in waveform
 
-    /// The waveform of `wave_mode` 0–7 from the 512-point byte-scale channels.
-    mutating func addBasicWave(_ s: FrameState, left timeLeft: [Float], right timeRight: [Float]) {
+    /// The waveform of `wave_mode` 0–7 from the 512-point byte-scale channels. During a transition from a preset
+    /// with another mode (`oldMode`), the line morphs from that mode's shape into this one's as `progress` goes
+    /// from 0 to 1.
+    mutating func addBasicWave(_ s: FrameState, left timeLeft: [Float], right timeRight: [Float],
+                               oldMode: Int? = nil, progress: Double = 1) {
         let vol = (s.levels.bass + s.levels.mid + s.levels.treb) / 3
         guard vol > -0.01, s.waveColor.w > 0.001, !timeLeft.isEmpty else { return }
 
@@ -186,7 +189,35 @@ struct OverlayBuilder {
             return out
         }
         let waveL = process(timeLeft), waveR = process(timeRight)
-        let mode = s.waveMode
+        var wave = basicWave(s, mode: s.waveMode, waveL: waveL, waveR: waveR, vol: vol)
+        if let oldMode, oldMode != s.waveMode {
+            let old = basicWave(s, mode: oldMode, waveL: waveL, waveR: waveR, vol: vol)
+            wave = Self.morph(from: old, oldMode: oldMode, to: wave, mode: s.waveMode, progress: progress)
+        }
+
+        var r = min(max(s.waveColor.x, 0), 1), g = min(max(s.waveColor.y, 0), 1), b = min(max(s.waveColor.z, 0), 1)
+        if s.waveBrighten {
+            let peak = max(r, g, b)
+            if peak > 0.01 { r /= peak; g /= peak; b /= peak }
+        }
+        let color = SIMD4<Float>(Float(r), Float(g), Float(b), Float(wave.alpha))
+        for line in [wave.points, wave.points2] where line.count > 1 {
+            let (smoothed, _) = Self.smooth(line.map { SIMD2(Float($0.x), Float($0.y)) })
+            let primitive: OverlayPrimitive = s.waveDots ? .points : .lineStrip
+            add(primitive, smoothed.map { OverlayVertex($0, color) }, additive: s.waveAdditive,
+                thick: s.waveThick || s.waveDots)
+        }
+    }
+
+    /// The built-in waveform's line or lines (mode 7 draws two) and its alpha.
+    struct BasicWave {
+        var points: [SIMD2<Double>] = []
+        var points2: [SIMD2<Double>] = []
+        var alpha = 0.0
+    }
+
+    /// One mode's waveform from the smoothed channels.
+    private func basicWave(_ s: FrameState, mode: Int, waveL: [Double], waveR: [Double], vol: Double) -> BasicWave {
         let posX = s.waveX * 2 - 1, posY = s.waveY * 2 - 1
         let ax = aspect.x, ay = aspect.y
         var mystery = s.waveMystery
@@ -306,20 +337,40 @@ struct OverlayBuilder {
         if s.modWaveAlphaByVolume {
             alpha *= (vol - s.modWaveAlphaStart) / (s.modWaveAlphaEnd - s.modWaveAlphaStart)
         }
-        alpha = min(max(alpha, 0), 1)
+        return BasicWave(points: points, points2: points2, alpha: min(max(alpha, 0), 1))
+    }
 
-        var r = min(max(s.waveColor.x, 0), 1), g = min(max(s.waveColor.y, 0), 1), b = min(max(s.waveColor.z, 0), 1)
-        if s.waveBrighten {
-            let peak = max(r, g, b)
-            if peak > 0.01 { r /= peak; g /= peak; b /= peak }
+    /// Moves each point of `new` toward the matching point of `old` (resampled to the same count), weighted by
+    /// the eased progress. Mode 7's two lines pair with the two halves of a single-line mode.
+    static func morph(from old: BasicWave, oldMode: Int, to new: BasicWave, mode: Int, progress: Double) -> BasicWave {
+        let mix = 0.5 - 0.5 * cos(progress * .pi), mix2 = 1 - mix
+        var out = new
+        out.alpha = mix * new.alpha + mix2 * old.alpha
+        /// `line` at fractional index `f`, linearly interpolated.
+        func at(_ line: [SIMD2<Double>], _ f: Double) -> SIMD2<Double> {
+            let i = min(max(Int(f), 0), line.count - 2), t = f - Double(i)
+            return line[i] * (1 - t) + line[i + 1] * t
         }
-        let color = SIMD4<Float>(Float(r), Float(g), Float(b), Float(alpha))
-        for line in [points, points2] where line.count > 1 {
-            let (smoothed, _) = Self.smooth(line.map { SIMD2(Float($0.x), Float($0.y)) })
-            let primitive: OverlayPrimitive = s.waveDots ? .points : .lineStrip
-            add(primitive, smoothed.map { OverlayVertex($0, color) }, additive: s.waveAdditive,
-                thick: s.waveThick || s.waveDots)
+        let n = new.points.count
+        guard n > 0, old.points.count > 1 else { return out }
+        if mode == 7 {
+            let m = Double(old.points.count - 1) / Double(n * 2)
+            for i in 0..<n { out.points[i] = new.points[i] * mix + at(old.points, Double(i) * m) * mix2 }
+            for i in 0..<min(n, new.points2.count) {
+                out.points2[i] = new.points2[i] * mix + at(old.points, Double(i + n) * m) * mix2
+            }
+        } else if oldMode == 7, old.points2.count > 1 {
+            let half = n / 2
+            guard half > 0 else { return out }
+            let m = Double(old.points.count - 1) / Double(half)
+            let m2 = Double(old.points2.count - 1) / Double(half)
+            out.points = (0..<half).map { new.points[$0] * mix + at(old.points, Double($0) * m) * mix2 }
+            out.points2 = (0..<half).map { new.points[$0 + half] * mix + at(old.points2, Double($0) * m2) * mix2 }
+        } else {
+            let m = Double(old.points.count - 1) / Double(n)
+            for i in 0..<n { out.points[i] = new.points[i] * mix + at(old.points, Double(i) * m) * mix2 }
         }
+        return out
     }
 
     // MARK: Darkened centre and borders

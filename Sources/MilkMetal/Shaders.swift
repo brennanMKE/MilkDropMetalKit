@@ -57,6 +57,22 @@ enum Shaders {
         return float4(previous.sample(s, in.uv).rgb * u.decay, 1);
     }
 
+    // Transitions: the incoming preset's pass, rendered to a texture the size of the target, laid over the outgoing
+    // one's through the mesh with each vertex's weight as alpha.
+    struct BlendOut { float4 position [[position]]; float weight; };
+
+    vertex BlendOut blend_vertex(uint vid [[vertex_id]], const device MeshVertex *vertices [[buffer(0)]],
+                                 const device float *weights [[buffer(1)]]) {
+        BlendOut out;
+        out.position = float4(float2(vertices[vid].position), 0, 1);
+        out.weight = weights[vid];
+        return out;
+    }
+
+    fragment float4 blend_fragment(BlendOut in [[stage_in]], texture2d<float> incoming [[texture(0)]]) {
+        return float4(incoming.read(uint2(in.position.xy)).rgb, in.weight);
+    }
+
     // Overlays: lines and triangles (optionally textured with the previous frame), and points.
     vertex OverlayOut overlay_vertex(uint vid [[vertex_id]], const device OverlayVertex *vertices [[buffer(0)]],
                                      constant OverlayUniforms &u [[buffer(1)]]) {

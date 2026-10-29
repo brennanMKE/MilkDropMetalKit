@@ -57,7 +57,7 @@ instead:
 | `rad`, `ang` | Distance from the centre (texture units) and angle, as Butterchurn computes them. |
 | `ret` | The output colour, `float3`. Saturated, with NaN as black. |
 | `hue_shader` | The composite's corner tints, interpolated. |
-| `time`, `fps`, `frame`, `progress` | Clock. `progress` is 0 until transitions exist. |
+| `time`, `fps`, `frame`, `progress` | Clock. `progress` is 0: in MilkDrop it is how far the preset is through its display time, which the host decides here. |
 | `bass`…`vol_att` | Band levels and their smoothed versions; `vol` is their mean. |
 | `q1`–`q32`, `_qa`–`_qh` | The per-frame equations' q variables. |
 | `aspect`, `texsize` | Aspect factors and inverses; texture size and inverse. |
