@@ -71,6 +71,26 @@ API. Requires macOS 14 and Swift 6. No third-party dependencies, no network acce
   window screenshots, screen recordings, a Gallery app check, corpus runs and transition captures (`--next`).
 - `milkview-demo`: `MilkView` in a window, or offscreen frames, fed by a generated test signal. Plays nothing.
 
+### Changed (breaking, before 1.0; [api-1.0.md](docs/api-1.0.md) F2 and F5)
+
+- **Errors.** `MilkViewError` is gone: `MilkView.init` throws `MilkRendererError.noCommandQueue`, as
+  `MilkRenderer.init` now does. `MilkRendererError.unsupportedPixelFormat` carries the `MTLPixelFormat`, not its raw
+  value; `shaderCompilation(String)` became `pipelineCompilation(function:message:)` and `resourceCreation(String)`
+  became `resourceCreation(resource:)`. `MilkPreset(contentsOf:)` throws only `MilkPresetError`, whose cases name
+  the file: `unreadableFile(URL, reason:)` (was a `CocoaError`), `unreadableText(URL)` and `empty(URL)` (were
+  `PresetParseError`), `bundleMissingPreset(URL)`. The three inits use typed throws
+  (`throws(MilkRendererError)`, `throws(MilkPresetError)`), so a host only ever catches MilkMetal's own types.
+- **Audio pacing moved into the renderer.** `feed` takes audio in any chunk size, in playback order, and the
+  renderer plays it out against `render`'s `time`: each frame analyzes the 1,024 frames ending at the audio that
+  should be playing then, not the newest fed. A ~100 ms `AVAudioEngine` tap buffer can go straight to `feed` and
+  plays out smoothly over the following frames. Playback starts at the first frame fed (visuals trail the feed by up
+  to one chunk; a host feeding one frame's audio before each `render` sees it one frame later). An underrun holds
+  the last window; after 0.25 s without audio the renderer plays out silence, so levels decay without the host
+  feeding zeros. At most 0.25 s waits to be played (older audio is dropped), and a sample-rate change drops what's
+  unplayed at the old rate. The ring grew from 4,096 to 65,536 frames (512 KB). `feed` still never allocates,
+  locks or blocks.
+- MilkDrop Gallery's tap feeds the renderer directly; its paced tap sink and 120 Hz feeding timer are removed.
+
 ### Known limitations
 - Disk textures that presets name aren't loaded (noise stands in).
 - No pixel-level comparison against Butterchurn yet.

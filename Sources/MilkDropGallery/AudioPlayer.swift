@@ -7,9 +7,10 @@ import os
 
 /// Plays one audio file on a loop through AVAudioEngine and hands what the mixer outputs to the renderer.
 ///
-/// Until a file is chosen the renderer gets the built-in beat, generated and never played; while paused it gets
-/// silence. A 120 Hz timer on the main thread does all the feeding, so the visuals advance smoothly even though
-/// the engine's tap delivers audio in large chunks.
+/// The engine's tap feeds the renderer directly, in whatever chunks it delivers (often about 100 ms): the renderer
+/// plays fed audio out in step with its frames. While paused the tap delivers, and feeds, silence. Until a file is
+/// chosen the renderer gets the built-in beat instead, generated (never played) by a 10 Hz timer that also updates
+/// the transport position.
 @MainActor
 @Observable
 final class AudioPlayer {
@@ -26,17 +27,16 @@ final class AudioPlayer {
     private(set) var isPlaying = false
     private(set) var error: String?
 
-    @ObservationIgnored private let renderer: MilkRenderer?
     @ObservationIgnored private let engine = AVAudioEngine()
     @ObservationIgnored private let player = AVAudioPlayerNode()
-    @ObservationIgnored private let sink = TapSink()
+    @ObservationIgnored private let feeder: TapFeeder
     @ObservationIgnored private var tapInstalled = false
     /// The file frame the current segment started at; the player's own clock counts from there.
     @ObservationIgnored private var segmentStart: AVAudioFramePosition = 0
     /// Bumped on every stop or reschedule, so a completion from an old segment is ignored.
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var synth = SynthAudio()
-    @ObservationIgnored private var scratch = [Float](repeating: 0, count: 8_192 * 2)
+    @ObservationIgnored private var scratch = [Float](repeating: 0, count: 24_000 * 2)
     @ObservationIgnored private var owedFrames = 0.0
     @ObservationIgnored private var lastTick = CACurrentMediaTime()
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
@@ -44,12 +44,12 @@ final class AudioPlayer {
     var hasFile: Bool { file != nil }
 
     init(renderer: MilkRenderer?) {
-        self.renderer = renderer
+        feeder = TapFeeder(renderer: renderer)
         engine.attach(player)
-        let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
+        let timer = Timer(timeInterval: 1.0 / 10, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.tick() }
         }
-        // .common, so feeding continues while a menu is open or the slider is dragged.
+        // .common, so the beat continues while a menu is open or the slider is dragged.
         RunLoop.main.add(timer, forMode: .common)
         observers.append(NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
@@ -69,6 +69,7 @@ final class AudioPlayer {
             engine.connect(player, to: engine.mainMixerNode, format: newFile.processingFormat)
             try startEngine()
             file = newFile
+            feeder.feedsTap = true
             fileName = url.lastPathComponent
             duration = Double(newFile.length) / newFile.processingFormat.sampleRate
             position = 0
@@ -84,7 +85,6 @@ final class AudioPlayer {
         if isPlaying {
             player.pause()
             isPlaying = false
-            sink.reset()
         } else {
             do {
                 try startEngine()
@@ -110,6 +110,7 @@ final class AudioPlayer {
     /// Stops the file and goes back to the built-in beat.
     func useBeat() {
         stopPlayer()
+        feeder.feedsTap = false
         file = nil
         fileName = nil
         duration = 0
@@ -123,7 +124,7 @@ final class AudioPlayer {
         let output = engine.outputNode.outputFormat(forBus: 0)
         guard output.sampleRate > 0, output.channelCount > 0 else { throw PlayerError.noOutputDevice }
         if !tapInstalled {
-            Self.installTap(on: engine.mainMixerNode, sink: sink)
+            Self.installTap(on: engine.mainMixerNode, feeder: feeder)
             tapInstalled = true
         }
         if !engine.isRunning {
@@ -155,7 +156,6 @@ final class AudioPlayer {
         generation += 1
         player.stop()
         isPlaying = false
-        sink.reset()
     }
 
     /// The file reached its end: loop it.
@@ -176,40 +176,30 @@ final class AudioPlayer {
 
     // The tap and completion blocks run on AVAudioEngine's threads. A closure written in a main-actor context is
     // main-actor isolated and traps there unless it's @Sendable, so the tap is made in a nonisolated function.
-    private nonisolated static func installTap(on node: AVAudioNode, sink: TapSink) {
-        node.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, _ in sink.write(buffer) }
+    private nonisolated static func installTap(on node: AVAudioNode, feeder: TapFeeder) {
+        node.installTap(onBus: 0, bufferSize: 1024, format: nil) { buffer, _ in feeder.write(buffer) }
     }
 
     // MARK: Feeding
 
     private func tick() {
         let now = CACurrentMediaTime()
-        let elapsed = min(now - lastTick, 0.1)
+        let elapsed = min(now - lastTick, 0.5)
         lastTick = now
         updatePosition()
-        guard let renderer else { return }
-
-        if file != nil, isPlaying {
-            sink.drain(seconds: elapsed) { samples, sampleRate in
-                renderer.feed(samples: samples, channels: 2, sampleRate: sampleRate)
-            }
+        // With a file, the tap feeds the renderer (silence while paused).
+        guard file == nil else {
+            owedFrames = 0
             return
         }
-        // The built-in beat before a file is chosen, silence while paused.
         let sampleRate = synth.sampleRate
         owedFrames += elapsed * sampleRate
         let frames = min(Int(owedFrames), scratch.count / 2)
         owedFrames -= Double(frames)
         guard frames > 0 else { return }
-        let beat = file == nil
         scratch.withUnsafeMutableBufferPointer { buffer in
-            if beat {
-                synth.render(into: buffer, frames: frames)
-            } else {
-                buffer.update(repeating: 0)
-            }
-            renderer.feed(samples: UnsafeBufferPointer(rebasing: buffer[..<(frames * 2)]), channels: 2,
-                          sampleRate: sampleRate)
+            synth.render(into: buffer, frames: frames)
+            feeder.feedBeat(UnsafeBufferPointer(rebasing: buffer[..<(frames * 2)]), sampleRate: sampleRate)
         }
     }
 
@@ -222,79 +212,63 @@ final class AudioPlayer {
     }
 }
 
-/// The hand-off between the engine's tap and the main thread.
+/// Feeds the renderer from the engine's tap, and the built-in beat from the main thread.
 ///
-/// AVAudioEngine delivers the mixer output in chunks (often about 100 ms), so the tap queues interleaved stereo
-/// here and the main thread drains it at the playback rate. Feeding each chunk as it arrives would make the visuals
-/// jump ten times a second. The queue holds at most a quarter second; older audio is dropped.
-final class TapSink: @unchecked Sendable {
+/// The tap's buffers go straight to `feed`, interleaved into preallocated storage; the renderer paces them. `feed`
+/// takes one producer at a time, so a lock keeps the tap and the beat from feeding at once, and `feedsTap` says
+/// which one the renderer hears. The tap thread isn't the real-time render thread, so the lock is fine there.
+final class TapFeeder: @unchecked Sendable {
     private let lock = OSAllocatedUnfairLock()
-    private let capacity = 192_000 / 4   // frames: a quarter second at up to 192 kHz
-    private let storage: UnsafeMutablePointer<Float>
-    private let output: UnsafeMutablePointer<Float>
-    private var head = 0      // oldest queued frame
-    private var count = 0     // queued frames
-    private var sampleRate = 48_000.0
-    private var owedFrames = 0.0
+    private let renderer: MilkRenderer?
+    private let capacity = 8_192   // frames interleaved per `feed`; larger buffers are fed in pieces
+    private let interleaved: UnsafeMutablePointer<Float>
+    private var tapFeeds = false
 
-    init() {
-        storage = .allocate(capacity: capacity * 2)
-        output = .allocate(capacity: capacity * 2)
+    init(renderer: MilkRenderer?) {
+        self.renderer = renderer
+        interleaved = .allocate(capacity: capacity * 2)
     }
 
     deinit {
-        storage.deallocate()
-        output.deallocate()
+        interleaved.deallocate()
+    }
+
+    /// True while a file is loaded: the tap feeds the renderer and the beat doesn't.
+    var feedsTap: Bool {
+        get { lock.withLockUnchecked { tapFeeds } }
+        set { lock.withLockUnchecked { tapFeeds = newValue } }
     }
 
     /// Tap side. Mono is copied to both channels; channels past the second are ignored.
     func write(_ buffer: AVAudioPCMBuffer) {
-        guard let data = buffer.floatChannelData, buffer.format.channelCount > 0 else { return }
+        guard let renderer, let data = buffer.floatChannelData, buffer.format.channelCount > 0 else { return }
         let frames = Int(buffer.frameLength)
         let stride = buffer.stride
         let left = data[0]
         let right = buffer.format.channelCount < 2 ? left : (buffer.format.isInterleaved ? data[0] + 1 : data[1])
+        let sampleRate = buffer.format.sampleRate
         lock.lock()
         defer { lock.unlock() }
-        sampleRate = buffer.format.sampleRate
-        let limit = min(capacity, Int(sampleRate / 4))
-        let skip = max(0, frames - limit)
-        for i in skip..<frames {
-            let slot = (head + count) % capacity
-            storage[slot * 2] = left[i * stride]
-            storage[slot * 2 + 1] = right[i * stride]
-            if count < limit {
-                count += 1
-            } else {
-                head = (head + 1) % capacity
+        guard tapFeeds else { return }
+        var done = 0
+        while done < frames {
+            let n = min(capacity, frames - done)
+            for i in 0..<n {
+                interleaved[i * 2] = left[(done + i) * stride]
+                interleaved[i * 2 + 1] = right[(done + i) * stride]
             }
+            renderer.feed(samples: UnsafeBufferPointer(start: interleaved, count: n * 2), channels: 2,
+                          sampleRate: sampleRate)
+            done += n
         }
     }
 
-    /// Main-thread side: hands `feed` the frames due in the last `seconds`, oldest first.
-    func drain(seconds: Double, feed: (UnsafeBufferPointer<Float>, Double) -> Void) {
+    /// Main-thread side: interleaved stereo from the built-in beat, fed only while no file is loaded.
+    func feedBeat(_ samples: UnsafeBufferPointer<Float>, sampleRate: Double) {
+        guard let renderer else { return }
         lock.lock()
-        owedFrames += seconds * sampleRate
-        let frames = min(Int(owedFrames), count)
-        // On an underrun, don't build up debt that would later release a burst.
-        owedFrames = frames < count ? owedFrames - Double(frames) : 0
-        for i in 0..<frames {
-            let slot = (head + i) % capacity
-            output[i * 2] = storage[slot * 2]
-            output[i * 2 + 1] = storage[slot * 2 + 1]
-        }
-        head = (head + frames) % capacity
-        count -= frames
-        let rate = sampleRate
-        lock.unlock()
-        if frames > 0 { feed(UnsafeBufferPointer(start: output, count: frames * 2), rate) }
-    }
-
-    func reset() {
-        lock.lock()
-        head = 0
-        count = 0
-        owedFrames = 0
-        lock.unlock()
+        defer { lock.unlock() }
+        guard !tapFeeds else { return }
+        renderer.feed(samples: samples, channels: 2, sampleRate: sampleRate)
     }
 }

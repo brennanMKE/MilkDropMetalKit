@@ -2,24 +2,6 @@ import AppKit
 import Metal
 import QuartzCore
 
-/// Errors from creating a `MilkView`.
-///
-/// The text in `description` is for display only; its wording is not API.
-public enum MilkViewError: Error, Equatable {
-    /// The renderer's device couldn't make a command queue for the view.
-    case noCommandQueue
-}
-
-extension MilkViewError: CustomStringConvertible, LocalizedError {
-    public var description: String {
-        switch self {
-        case .noCommandQueue: "The Metal device couldn't create a command queue for the view."
-        }
-    }
-
-    public var errorDescription: String? { description }
-}
-
 /// An `NSView` backed by a `CAMetalLayer` that draws a `MilkRenderer` on every display refresh.
 /// The host owns windows, menus, preset browsing and full screen.
 @MainActor
@@ -31,10 +13,10 @@ public final class MilkView: NSView {
     private var startTime: CFTimeInterval?
 
     /// Creates a view that draws `renderer` in the renderer's `pixelFormat`. It starts drawing once it's in a
-    /// window, with its own clock starting at 0. Throws `MilkViewError.noCommandQueue` if the device can't make a
-    /// command queue.
-    public init(renderer: MilkRenderer, frame: NSRect = .zero) throws {
-        guard let queue = renderer.device.makeCommandQueue() else { throw MilkViewError.noCommandQueue }
+    /// window, with its own clock starting at 0. Throws `MilkRendererError.noCommandQueue` if the device can't make
+    /// a command queue.
+    public init(renderer: MilkRenderer, frame: NSRect = .zero) throws(MilkRendererError) {
+        guard let queue = renderer.device.makeCommandQueue() else { throw MilkRendererError.noCommandQueue }
         self.renderer = renderer
         commandQueue = queue
         super.init(frame: frame)

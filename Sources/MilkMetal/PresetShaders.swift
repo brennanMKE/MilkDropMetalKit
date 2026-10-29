@@ -140,14 +140,16 @@ final class PipelineCache {
         try await withCheckedThrowingContinuation { continuation in
             device.makeLibrary(source: shader.metalSource, options: nil) { library, error in
                 guard let library else {
-                    continuation.resume(throwing: error ?? MilkRendererError.shaderCompilation(shader.stage.rawValue))
+                    continuation.resume(throwing: error ?? MilkRendererError.pipelineCompilation(
+                        function: shader.stage.rawValue, message: "Metal returned no library"))
                     return
                 }
                 device.makeRenderPipelineState(descriptor: descriptor(shader, format, library)) { pipeline, error in
                     if let pipeline {
                         continuation.resume(returning: pipeline)
                     } else {
-                        continuation.resume(throwing: error ?? MilkRendererError.shaderCompilation(shader.stage.rawValue))
+                        continuation.resume(throwing: error ?? MilkRendererError.pipelineCompilation(
+                            function: shader.stage.rawValue, message: "Metal returned no pipeline"))
                     }
                 }
             }

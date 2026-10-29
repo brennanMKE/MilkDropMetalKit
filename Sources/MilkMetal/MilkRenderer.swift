@@ -3,28 +3,34 @@ import Metal
 import MilkPresetFormat
 import MilkShaders
 
-/// Errors from creating a `MilkRenderer`, and from compiling a preset's shaders (those are reported through
-/// `MilkRenderer.presetErrors`, not thrown to the host).
+/// Errors from creating a `MilkRenderer` or a `MilkView`.
 ///
-/// The text in `description` and in the associated strings is for display only; its wording is not API.
+/// Every error MilkMetal throws while setting up rendering is one of these. The text in `description` (and in the
+/// `message` of `pipelineCompilation`) is for display only; its wording is not API. Switch over the cases with a
+/// `default`: new cases may be added in a minor release.
 public enum MilkRendererError: Error, Equatable {
-    /// The pixel format, by raw value, isn't one the renderer draws into; see `MilkRenderer.supportedPixelFormats`.
-    case unsupportedPixelFormat(MTLPixelFormat.RawValue)
-    /// A shader didn't compile. For the renderer's built-in shaders this is a package bug; the string is Metal's
-    /// message or the stage that failed.
-    case shaderCompilation(String)
-    /// The device couldn't make a resource (a command queue, buffer, texture or sampler); the string names it.
-    case resourceCreation(String)
+    /// The pixel format isn't one the renderer draws into (the ones a `CAMetalLayer` can show); see
+    /// `MilkRenderer.supportedPixelFormats`.
+    case unsupportedPixelFormat(MTLPixelFormat)
+    /// The device couldn't make a command queue, for the renderer or for a `MilkView`.
+    case noCommandQueue
+    /// One of the renderer's built-in pipelines didn't compile: a package bug. `function` names the shader function
+    /// or stage; `message` is Metal's text.
+    case pipelineCompilation(function: String, message: String)
+    /// The device couldn't allocate a buffer, texture or sampler; `resource` names it.
+    case resourceCreation(resource: String)
 }
 
 extension MilkRendererError: CustomStringConvertible, LocalizedError {
     public var description: String {
         switch self {
-        case .unsupportedPixelFormat(let raw):
-            "Unsupported pixel format (MTLPixelFormat raw value \(raw)). Use one of bgra8Unorm, bgra8Unorm_srgb, "
+        case .unsupportedPixelFormat(let format):
+            "Unsupported pixel format \(MilkRenderer.name(of: format)). Use one of bgra8Unorm, bgra8Unorm_srgb, "
                 + "rgba16Float, rgb10a2Unorm or bgr10a2Unorm."
-        case .shaderCompilation(let message):
-            "A shader didn't compile: \(message)"
+        case .noCommandQueue:
+            "The Metal device couldn't create a command queue."
+        case .pipelineCompilation(let function, let message):
+            "The \(function) pipeline didn't compile: \(message)"
         case .resourceCreation(let resource):
             "The Metal device couldn't create a resource: \(resource)."
         }
@@ -181,27 +187,27 @@ public final class MilkRenderer {
     /// the default waveform until `load` is called).
     ///
     /// Compiles the built-in pipelines and allocates noise textures, so it takes a moment; create one renderer and
-    /// keep it. Throws `MilkRendererError.unsupportedPixelFormat` when `pixelFormat` isn't in
-    /// `supportedPixelFormats`, `.resourceCreation` when the device runs out of resources, and `.shaderCompilation`
-    /// if a built-in shader doesn't compile (a package bug).
-    public init(device: MTLDevice, pixelFormat: MTLPixelFormat) throws {
+    /// keep it. Throws `MilkRendererError` only: `.unsupportedPixelFormat` when `pixelFormat` isn't in
+    /// `supportedPixelFormats`, `.noCommandQueue` or `.resourceCreation` when the device runs out of resources, and
+    /// `.pipelineCompilation` if a built-in shader doesn't compile (a package bug).
+    public init(device: MTLDevice, pixelFormat: MTLPixelFormat) throws(MilkRendererError) {
         guard Self.supportedPixelFormats.contains(pixelFormat) else {
-            throw MilkRendererError.unsupportedPixelFormat(pixelFormat.rawValue)
+            throw MilkRendererError.unsupportedPixelFormat(pixelFormat)
         }
         self.device = device
         self.pixelFormat = pixelFormat
-        guard let queue = device.makeCommandQueue() else { throw MilkRendererError.resourceCreation("command queue") }
+        guard let queue = device.makeCommandQueue() else { throw MilkRendererError.noCommandQueue }
         commandQueue = queue
 
         let library: MTLLibrary
         do {
             library = try device.makeLibrary(source: Shaders.source, options: nil)
         } catch {
-            throw MilkRendererError.shaderCompilation("\(error)")
+            throw MilkRendererError.pipelineCompilation(function: "library", message: "\(error)")
         }
         func pipeline(_ vertex: String, _ fragment: String, format: MTLPixelFormat,
                       blend: (MTLBlendFactor, MTLBlendFactor)? = nil,
-                      keepAlpha: Bool = false) throws -> MTLRenderPipelineState {
+                      keepAlpha: Bool = false) throws(MilkRendererError) -> MTLRenderPipelineState {
             let d = MTLRenderPipelineDescriptor()
             d.label = fragment
             d.vertexFunction = library.makeFunction(name: vertex)
@@ -218,7 +224,7 @@ public final class MilkRenderer {
             do {
                 return try device.makeRenderPipelineState(descriptor: d)
             } catch {
-                throw MilkRendererError.shaderCompilation("\(fragment): \(error)")
+                throw MilkRendererError.pipelineCompilation(function: fragment, message: "\(error)")
             }
         }
         warpPipeline = try pipeline("warp_vertex", "warp_fragment", format: Self.feedbackFormat)
@@ -245,7 +251,8 @@ public final class MilkRenderer {
                           try pipeline("blend_vertex", "blend_fragment", format: pixelFormat,
                                        blend: (.sourceAlpha, .oneMinusSourceAlpha), keepAlpha: true))
 
-        func sampler(_ filter: MTLSamplerMinMagFilter, _ mode: MTLSamplerAddressMode) throws -> MTLSamplerState {
+        func sampler(_ filter: MTLSamplerMinMagFilter,
+                     _ mode: MTLSamplerAddressMode) throws(MilkRendererError) -> MTLSamplerState {
             let d = MTLSamplerDescriptor()
             d.minFilter = filter
             d.magFilter = filter
@@ -253,7 +260,7 @@ public final class MilkRenderer {
             d.tAddressMode = mode
             d.rAddressMode = mode
             guard let s = device.makeSamplerState(descriptor: d) else {
-                throw MilkRendererError.resourceCreation("sampler")
+                throw MilkRendererError.resourceCreation(resource: "sampler")
             }
             return s
         }
@@ -279,17 +286,42 @@ public final class MilkRenderer {
         .bgra8Unorm, .bgra8Unorm_srgb, .rgba16Float, .rgb10a2Unorm, .bgr10a2Unorm,
     ]
 
-    /// Hands the renderer audio. Interleaved Float32 at `sampleRate`; stereo is expected, one channel is duplicated
-    /// to both sides, and channels past two are ignored.
+    /// A pixel format's Swift name for messages, or its raw value for formats this package doesn't name.
+    nonisolated static func name(of format: MTLPixelFormat) -> String {
+        switch format {
+        case .bgra8Unorm: "bgra8Unorm"
+        case .bgra8Unorm_srgb: "bgra8Unorm_srgb"
+        case .rgba8Unorm: "rgba8Unorm"
+        case .rgba8Unorm_srgb: "rgba8Unorm_srgb"
+        case .rgba16Float: "rgba16Float"
+        case .rgba32Float: "rgba32Float"
+        case .rgb10a2Unorm: "rgb10a2Unorm"
+        case .bgr10a2Unorm: "bgr10a2Unorm"
+        case .r8Unorm: "r8Unorm"
+        case .invalid: "invalid"
+        default: "with raw value \(format.rawValue)"
+        }
+    }
+
+    /// Hands the renderer audio, in any chunk size, in playback order. Interleaved Float32 at `sampleRate`; stereo
+    /// is expected, one channel is duplicated to both sides, and channels past two are ignored.
     ///
     /// Nonisolated: call it from any thread (typically the audio tap's), but **from one thread at a time**. The ring
     /// behind it is single-producer, so two threads feeding at once (two taps, or a tap plus a main-thread synth)
-    /// race. It copies into a 4,096-frame ring without allocating, locking or blocking, so it is safe on a real-time
-    /// audio thread. The analyzer reads the newest 1,024 frames at each `render`.
+    /// race. It copies into a 65,536-frame ring without allocating, locking or blocking, so it is safe on a
+    /// real-time audio thread.
     ///
-    /// Feed audio in small chunks as it plays. The renderer doesn't pace what it's given: a large tap buffer (an
-    /// `AVAudioEngine` tap often delivers about 100 ms at once) is seen as the same window for several frames, so
-    /// the visuals step. Split such buffers and feed them over time, as the MilkDrop Gallery's `AudioPlayer` does.
+    /// The renderer plays what it's fed out in step with `render`'s `time`, so feed each buffer as it arrives: an
+    /// `AVAudioEngine` tap's ~100 ms buffers play out smoothly over the following frames. Each `render` analyzes the
+    /// 1,024 frames that end at the audio that should be playing "now". That means:
+    /// - Playback starts at the first frame fed, so the visuals trail the feed by up to one chunk.
+    /// - If the renderer runs out (the next chunk is late), it holds the last window and carries on from there when
+    ///   audio arrives. After a quarter of a second with nothing, it plays out silence: the waveform falls flat and
+    ///   the levels decay as for fed silence. You don't need to feed silence while paused.
+    /// - At most a quarter of a second waits to be played; if more piles up (`render` isn't being called), the
+    ///   oldest is dropped.
+    /// - A new `sampleRate` drops what's still unplayed at the old rate and plays on from the first frame at the
+    ///   new one. A `sampleRate` that isn't positive and finite drops the call.
     public nonisolated func feed(samples: UnsafeBufferPointer<Float>, channels: Int, sampleRate: Double) {
         audio.write(samples: samples, channels: channels, sampleRate: sampleRate)
     }
@@ -384,7 +416,7 @@ public final class MilkRenderer {
             fps = min(max(fps * 0.93 + instant * 0.07, 1), 240)
         }
         lastTime = time
-        analyzer.update(from: audio, fps: fps)
+        analyzer.update(from: audio, time: time, fps: fps)
 
         // Equations.
         let inputs = FrameInputs(time: time, fps: fps, frame: frame, levels: analyzer.levels, mesh: meshSize,
@@ -827,7 +859,7 @@ public final class MilkRenderer {
                                                       options: .storageModeShared),
                       let weights = device.makeBuffer(length: vertexCount * MemoryLayout<Float>.stride,
                                                       options: .storageModeShared)
-                else { throw MilkRendererError.resourceCreation("vertex buffers") }
+                else { throw MilkRendererError.resourceCreation(resource: "vertex buffers") }
                 return FrameSlot(mesh: mesh, overlay: overlay, weights: weights)
             }
             slotIndex = 0
@@ -844,7 +876,7 @@ public final class MilkRenderer {
             }
             indexCount = indices.count
             indexBuffer = device.makeBuffer(bytes: indices, length: indices.count * 4, options: .storageModeShared)
-            guard indexBuffer != nil else { throw MilkRendererError.resourceCreation("index buffer") }
+            guard indexBuffer != nil else { throw MilkRendererError.resourceCreation(resource: "index buffer") }
         }
         if feedback.first?.width != width || feedback.first?.height != height {
             feedback = try (0..<2).map { i in try makeTarget(width: width, height: height, label: "feedback\(i)") }
@@ -859,7 +891,9 @@ public final class MilkRenderer {
                                                          height: height, mipmapped: false)
         d.usage = [.renderTarget, .shaderRead]
         d.storageMode = .private
-        guard let t = device.makeTexture(descriptor: d) else { throw MilkRendererError.resourceCreation(label) }
+        guard let t = device.makeTexture(descriptor: d) else {
+            throw MilkRendererError.resourceCreation(resource: label)
+        }
         t.label = "MilkRenderer.\(label)"
         return t
     }

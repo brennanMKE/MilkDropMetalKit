@@ -8,7 +8,8 @@ struct AudioLevels: Equatable {
     var bassAtt = 1.0, midAtt = 1.0, trebAtt = 1.0
 }
 
-/// Turns the newest PCM in an `AudioRing` into what presets read, the way Butterchurn (and MilkDrop) do:
+/// Turns the PCM in an `AudioRing` that's playing "now" (by its `AudioPlayhead`) into what presets read, the way
+/// Butterchurn (and MilkDrop) do:
 ///
 /// - `waveLeft`/`waveRight`: 512 points per channel in MilkDrop's byte scale (−128…127), each the mean of two
 ///   neighbouring samples of the 1024-sample window, for the waveforms.
@@ -55,13 +56,30 @@ final class AudioAnalyzer {
         vDSP_destroy_fftsetup(fft)
     }
 
-    /// Reads the ring and updates everything. `fps` adapts the smoothing so it behaves the same at any frame rate.
-    func update(from ring: AudioRing, fps: Double) {
+    /// Where in the fed audio "now" is; see `AudioPlayhead`.
+    private(set) var playhead = AudioPlayhead()
+    /// The window the last `update` analyzed.
+    private(set) var window = AudioPlayhead.Window(end: 0, validEnd: 0)
+
+    /// Moves the playhead to render-clock `time`, reads the window ending there from the ring and updates
+    /// everything. `fps` adapts the smoothing so it behaves the same at any frame rate.
+    func update(from ring: AudioRing, time: Double, fps: Double) {
+        var state = ring.state()
+        let maxLag = AudioPlayhead.maxLag(sampleRate: state.sampleRate, capacity: ring.capacity,
+                                          windowSize: Self.windowSize)
+        var window = playhead.advance(to: time, state, maxLag: maxLag)
         left.withUnsafeMutableBufferPointer { l in
             right.withUnsafeMutableBufferPointer { r in
-                _ = ring.copyLatest(count: Self.windowSize, left: l, right: r)
+                // A tear needs the writer to lap the ring during the copy; retry a few times, then read silence.
+                for _ in 0..<4 {
+                    if ring.copy(window, count: Self.windowSize, left: l, right: r) { return }
+                    state = ring.state()
+                    guard let caught = playhead.catchUp(state, maxLag: maxLag) else { return }
+                    window = caught
+                }
             }
         }
+        self.window = window
         // Byte scale, as the WebAudio analyser hands Butterchurn its samples.
         vDSP.multiply(128, left, result: &left)
         vDSP.multiply(128, right, result: &right)
@@ -73,7 +91,7 @@ final class AudioAnalyzer {
         spectrum(of: left, into: &spectrumLeft)
         spectrum(of: right, into: &spectrumRight)
         spectrum(of: mono, into: &spectrumMono)
-        updateLevels(sampleRate: ring.sampleRate, fps: fps)
+        updateLevels(sampleRate: state.sampleRate, fps: fps)
     }
 
     /// 1024 samples → 512 points, each the mean of a sample and the one before it.

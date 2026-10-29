@@ -2,18 +2,40 @@ import Foundation
 import MilkPresetFormat
 import MilkShaders
 
-/// Errors from reading a `.milkpreset` bundle in `MilkPreset(contentsOf:)`.
+/// Errors from reading a preset with `MilkPreset(contentsOf:)`. It throws nothing else.
 ///
-/// The text in `description` is for display only; its wording is not API.
+/// Each case carries the file it's about. The text in `description` (and in `reason`) is for display only; its
+/// wording is not API. Switch over the cases with a `default`: new cases may be added in a minor release.
+///
+/// The parser skips lines it doesn't understand rather than failing, so no case points at a line; a preset's
+/// equations and shaders that don't compile are reported by `MilkRenderer.presetErrors` once it's loaded.
 public enum MilkPresetError: Error, Equatable {
-    /// A bundle without `preset.milk`.
-    case bundleMissingPreset
+    /// The file couldn't be read: it doesn't exist or isn't readable. `reason` is the system's description of the
+    /// failure.
+    case unreadableFile(URL, reason: String)
+    /// The file isn't text in an encoding `.milk` files use (UTF-8 or Windows-1252).
+    case unreadableText(URL)
+    /// The file has no `key=value` lines at all.
+    case empty(URL)
+    /// A folder (a `.milkpreset` bundle) without `preset.milk`; the URL is the bundle's.
+    case bundleMissingPreset(URL)
 }
 
 extension MilkPresetError: CustomStringConvertible, LocalizedError {
-    public var description: String {
+    /// The file the error is about.
+    public var url: URL {
         switch self {
-        case .bundleMissingPreset: "The .milkpreset bundle has no preset.milk."
+        case .unreadableFile(let url, _), .unreadableText(let url), .empty(let url), .bundleMissingPreset(let url): url
+        }
+    }
+
+    public var description: String {
+        let name = url.lastPathComponent
+        return switch self {
+        case .unreadableFile(_, let reason): "Can't read \(name): \(reason)"
+        case .unreadableText: "\(name) isn't text in UTF-8 or Windows-1252."
+        case .empty: "\(name) has no preset settings (no key=value lines)."
+        case .bundleMissingPreset: "The .milkpreset bundle \(name) has no preset.milk."
         }
     }
 
@@ -44,17 +66,17 @@ public struct MilkPreset: Sendable {
 
     /// Reads a `.milk` file, or a `.milkpreset` bundle written by `milkconvert convert`.
     ///
-    /// Throws `MilkPresetError.bundleMissingPreset` for a bundle without `preset.milk`, `PresetParseError` for text
-    /// that can't be read or is empty, and Foundation's file errors (`CocoaError`) for a file that can't be opened.
-    public init(contentsOf url: URL) throws {
+    /// Throws `MilkPresetError` only: `.unreadableFile` for a file that can't be opened, `.unreadableText` or
+    /// `.empty` for one that isn't a preset, and `.bundleMissingPreset` for a bundle without `preset.milk`.
+    public init(contentsOf url: URL) throws(MilkPresetError) {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
-            self.init(name: url.deletingPathExtension().lastPathComponent, model: try PresetModel(contentsOf: url))
+            self.init(name: url.deletingPathExtension().lastPathComponent, model: try Self.readModel(url))
             return
         }
         let presetURL = url.appendingPathComponent("preset.milk")
-        guard FileManager.default.fileExists(atPath: presetURL.path) else { throw MilkPresetError.bundleMissingPreset }
-        let model = try PresetModel(contentsOf: presetURL)
+        guard FileManager.default.fileExists(atPath: presetURL.path) else { throw .bundleMissingPreset(url) }
+        let model = try Self.readModel(presetURL)
         let manifestURL = url.appendingPathComponent("manifest.json")
         let manifest = (try? Data(contentsOf: manifestURL)).flatMap { try? JSONDecoder().decode(BundleManifest.self, from: $0) }
         var shaders: [String: ConvertedShader] = [:]
@@ -63,6 +85,27 @@ public struct MilkPreset: Sendable {
             shaders[stage] = ConvertedShader(metalSource: source, blurLevel: entry.blurLevel, userTextures: entry.userTextures)
         }
         self.init(name: url.deletingPathExtension().lastPathComponent, model: model, convertedShaders: shaders)
+    }
+}
+
+extension MilkPreset {
+    /// Parses the `.milk` file at `url`, mapping file and parse errors to `MilkPresetError`.
+    private static func readModel(_ url: URL) throws(MilkPresetError) -> PresetModel {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            throw .unreadableFile(url, reason: error.localizedDescription)
+        }
+        do {
+            return try PresetModel(data: data)
+        } catch PresetParseError.unreadableText {
+            throw .unreadableText(url)
+        } catch PresetParseError.empty {
+            throw .empty(url)
+        } catch {
+            throw .unreadableFile(url, reason: "\(error)")
+        }
     }
 }
 

@@ -16,7 +16,7 @@ struct NoiseTextures {
     /// In shader-slot order: noise_lq, noise_lq_lite, noise_mq, noise_hq, noisevol_lq, noisevol_hq.
     var all: [MTLTexture] { [lq, lqLite, mq, hq, volLQ, volHQ] }
 
-    init(device: MTLDevice, seed: UInt64 = 0x4D69_6C6B) throws {
+    init(device: MTLDevice, seed: UInt64 = 0x4D69_6C6B) throws(MilkRendererError) {
         var random = SplitMix(seed: seed)
         lq = try Self.texture2D(device, size: 256, data: Self.noise2D(size: 256, zoom: 1, &random), label: "noise_lq")
         lqLite = try Self.texture2D(device, size: 32, data: Self.noise2D(size: 32, zoom: 1, &random), label: "noise_lq_lite")
@@ -91,17 +91,21 @@ struct NoiseTextures {
 
     // MARK: Textures
 
-    private static func texture2D(_ device: MTLDevice, size: Int, data: [UInt8], label: String) throws -> MTLTexture {
+    private static func texture2D(_ device: MTLDevice, size: Int, data: [UInt8],
+                                  label: String) throws(MilkRendererError) -> MTLTexture {
         let d = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba8Unorm, width: size, height: size,
                                                          mipmapped: false)
         d.usage = .shaderRead
-        guard let t = device.makeTexture(descriptor: d) else { throw MilkRendererError.resourceCreation(label) }
+        guard let t = device.makeTexture(descriptor: d) else {
+            throw MilkRendererError.resourceCreation(resource: label)
+        }
         t.label = "MilkRenderer.\(label)"
         t.replace(region: MTLRegionMake2D(0, 0, size, size), mipmapLevel: 0, withBytes: data, bytesPerRow: size * 4)
         return t
     }
 
-    private static func texture3D(_ device: MTLDevice, size: Int, data: [UInt8], label: String) throws -> MTLTexture {
+    private static func texture3D(_ device: MTLDevice, size: Int, data: [UInt8],
+                                  label: String) throws(MilkRendererError) -> MTLTexture {
         let d = MTLTextureDescriptor()
         d.textureType = .type3D
         d.pixelFormat = .rgba8Unorm
@@ -109,7 +113,9 @@ struct NoiseTextures {
         d.height = size
         d.depth = size
         d.usage = .shaderRead
-        guard let t = device.makeTexture(descriptor: d) else { throw MilkRendererError.resourceCreation(label) }
+        guard let t = device.makeTexture(descriptor: d) else {
+            throw MilkRendererError.resourceCreation(resource: label)
+        }
         t.label = "MilkRenderer.\(label)"
         t.replace(region: MTLRegionMake3D(0, 0, 0, size, size, size), mipmapLevel: 0, slice: 0, withBytes: data,
                   bytesPerRow: size * 4, bytesPerImage: size * size * 4)

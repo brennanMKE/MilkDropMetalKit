@@ -53,13 +53,17 @@ try renderer.load(MilkPreset(contentsOf: nextURL), transition: 2.7)
 // A ready-made view: CAMetalLayer plus a display link. The host owns windows, menus and preset browsing.
 let view = try MilkView(renderer: renderer)
 
-// From an audio tap, on any thread but one thread at a time. Interleaved Float32; it never allocates or locks.
-// Feed small chunks as the audio plays: a large tap buffer is seen as one window for several frames.
+// From an audio tap, on any thread but one thread at a time. Interleaved Float32; it never allocates, locks or
+// blocks. Feed each buffer as it arrives, whatever its size: the renderer plays it out in step with its frames.
 renderer.feed(samples: buffer, channels: 2, sampleRate: 48_000)
 ```
 
 `MilkRenderer` is `@MainActor`. Only `feed` is nonisolated, and it's single-producer: call it from one thread at a
-time. To draw into your own Metal layer, call `render(to:commandBuffer:time:)` with the drawable's texture. The
+time. The renderer paces fed audio itself: an `AVAudioEngine` tap's ~100 ms buffers can go straight to `feed`, and
+each frame analyzes the audio that should be playing at its `time` (the visuals trail the feed by up to one buffer).
+If audio stops arriving, the last window holds for a quarter of a second and then decays to silence, so there's no
+need to feed silence while paused. Errors are MilkMetal's own: `MilkRendererError` from creating a renderer or
+view, and `MilkPresetError` (which names the file) from `MilkPreset(contentsOf:)`. To draw into your own Metal layer, call `render(to:commandBuffer:time:)` with the drawable's texture. The
 texture's pixel format must equal the renderer's `pixelFormat`, and you must commit every command buffer you pass:
 the renderer keeps up to three frames in flight and waits for one to complete, so an uncommitted buffer stalls the
 main thread a few frames later.
@@ -92,7 +96,8 @@ scripts/make-dmg.sh --notary-profile <profile>   # also notarized and stapled, s
 
 Space plays and pauses, ⌘[ and ⌘] step through presets, ⌘I toggles the info card, and the timer button
 auto-advances every 20 seconds. It's also the reference for embedding `MilkView` in SwiftUI (`MilkDropView` in
-`Sources/MilkDropGallery/ContentView.swift`) and feeding it from AVAudioEngine (`AudioPlayer.swift`).
+`Sources/MilkDropGallery/ContentView.swift`) and feeding it from AVAudioEngine (`AudioPlayer.swift`: the mixer's
+tap feeds the renderer directly).
 
 ## Development
 

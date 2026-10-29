@@ -9,18 +9,24 @@ private let repoRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent
     .deletingLastPathComponent()
 
 struct AudioRingTests {
-    @Test func zeroFillsBeforeEnoughFrames() {
+    private func copy(_ ring: AudioRing, _ window: AudioPlayhead.Window, count: Int) -> (ok: Bool, [Float], [Float]) {
+        var left = [Float](repeating: 9, count: count)
+        var right = [Float](repeating: 9, count: count)
+        let ok = left.withUnsafeMutableBufferPointer { l in
+            right.withUnsafeMutableBufferPointer { r in ring.copy(window, count: count, left: l, right: r) }
+        }
+        return (ok, left, right)
+    }
+
+    @Test func zeroFillsBeforeTheStreamBegins() {
         let ring = AudioRing(capacity: 8)
         let input: [Float] = [1, -1, 2, -2]  // two stereo frames
         input.withUnsafeBufferPointer { ring.write(samples: $0, channels: 2, sampleRate: 48_000) }
-        var left = [Float](repeating: 9, count: 4)
-        var right = [Float](repeating: 9, count: 4)
-        let available = left.withUnsafeMutableBufferPointer { l in
-            right.withUnsafeMutableBufferPointer { r in ring.copyLatest(count: 4, left: l, right: r) }
-        }
-        #expect(available == 2)
+        let (ok, left, right) = copy(ring, .init(end: 2, validEnd: 2), count: 4)
+        #expect(ok)
         #expect(left == [0, 0, 1, 2])
         #expect(right == [0, 0, -1, -2])
+        #expect(ring.state().written == 2)
         #expect(ring.sampleRate == 48_000)
     }
 
@@ -28,13 +34,97 @@ struct AudioRingTests {
         let ring = AudioRing(capacity: 4)
         let input: [Float] = (1...6).map(Float.init)  // six mono frames
         input.withUnsafeBufferPointer { ring.write(samples: $0, channels: 1, sampleRate: 44_100) }
-        var left = [Float](repeating: 0, count: 3)
-        var right = [Float](repeating: 0, count: 3)
-        left.withUnsafeMutableBufferPointer { l in
-            right.withUnsafeMutableBufferPointer { r in _ = ring.copyLatest(count: 3, left: l, right: r) }
-        }
+        let (ok, left, right) = copy(ring, .init(end: 6, validEnd: 6), count: 3)
+        #expect(ok)
         #expect(left == [4, 5, 6])
         #expect(right == [4, 5, 6])
+        // Frames 0 and 1 have been overwritten: that read is torn, and reads as silence.
+        let torn = copy(ring, .init(end: 3, validEnd: 6), count: 3)
+        #expect(!torn.ok)
+        #expect(torn.1 == [0, 0, 0])
+    }
+
+    @Test func readsAWindowBehindTheNewestFrame() {
+        let ring = AudioRing(capacity: 16)
+        let input: [Float] = (1...10).map(Float.init)
+        input.withUnsafeBufferPointer { ring.write(samples: $0, channels: 1, sampleRate: 44_100) }
+        #expect(copy(ring, .init(end: 5, validEnd: 10), count: 3).1 == [3, 4, 5])
+        // Past `validEnd` and below `floor` read as silence.
+        #expect(copy(ring, .init(end: 9, validEnd: 8), count: 3).1 == [7, 8, 0])
+        #expect(copy(ring, .init(end: 5, validEnd: 10, floor: 4), count: 3).1 == [0, 0, 5])
+    }
+
+    @Test func recordsWhereASampleRateStarts() {
+        let ring = AudioRing(capacity: 16)
+        let input = [Float](repeating: 0.5, count: 4)
+        input.withUnsafeBufferPointer { ring.write(samples: $0, channels: 1, sampleRate: 48_000) }
+        input.withUnsafeBufferPointer { ring.write(samples: $0, channels: 1, sampleRate: 48_000) }
+        #expect(ring.state().rateStart == 0)
+        input.withUnsafeBufferPointer { ring.write(samples: $0, channels: 1, sampleRate: 44_100) }
+        #expect(ring.state().rateStart == 8)
+        #expect(ring.state().sampleRate == 44_100)
+        input.withUnsafeBufferPointer { ring.write(samples: $0, channels: 1, sampleRate: 0) }
+        #expect(ring.state().written == 12, "a bad sample rate drops the write")
+    }
+}
+
+struct AudioPlayheadTests {
+    private let maxLag: Int64 = 12_000
+
+    private func state(_ written: Int64, rate: Double = 48_000, rateStart: Int64 = 0) -> AudioRing.State {
+        AudioRing.State(written: written, sampleRate: rate, rateStart: rateStart)
+    }
+
+    @Test func playsAChunkOutAtTheSampleRate() {
+        var playhead = AudioPlayhead()
+        #expect(playhead.advance(to: 0, state(0), maxLag: maxLag).end == 0)
+        #expect(playhead.advance(to: 0.01, state(4_800), maxLag: maxLag).end == 0, "starts at the first frame")
+        #expect(playhead.advance(to: 0.02, state(4_800), maxLag: maxLag).end == 480)
+        #expect(playhead.advance(to: 0.05, state(4_800), maxLag: maxLag).end == 1_920)
+    }
+
+    @Test func underrunHoldsThenContinuesFromThere() {
+        var playhead = AudioPlayhead()
+        _ = playhead.advance(to: 0, state(800), maxLag: maxLag)
+        #expect(playhead.advance(to: 0.1, state(800), maxLag: maxLag).end == 800)
+        #expect(playhead.advance(to: 0.2, state(800), maxLag: maxLag).end == 800)
+        // Audio arrives within the hold: it plays from its first frame, not from where the clock would be.
+        #expect(playhead.advance(to: 0.21, state(5_600), maxLag: maxLag).end == 800 + 480)
+    }
+
+    @Test func overrunDropsTheOldest() {
+        var playhead = AudioPlayhead()
+        _ = playhead.advance(to: 0, state(800), maxLag: maxLag)
+        #expect(playhead.advance(to: 0.01, state(48_000), maxLag: maxLag).end == 48_000 - maxLag)
+        #expect(AudioPlayhead.maxLag(sampleRate: 48_000, capacity: 65_536, windowSize: 1_024) == 12_000)
+        #expect(AudioPlayhead.maxLag(sampleRate: 384_000, capacity: 65_536, windowSize: 1_024) == 63_488)
+    }
+
+    @Test func stoppingPlaysOutSilenceThenRestartsCleanly() {
+        var playhead = AudioPlayhead()
+        _ = playhead.advance(to: 0, state(800), maxLag: maxLag)
+        _ = playhead.advance(to: 0.1, state(800), maxLag: maxLag)
+        #expect(playhead.advance(to: 0.4, state(800), maxLag: maxLag) == .init(end: 800, validEnd: 800))
+        let later = playhead.advance(to: 0.5, state(800), maxLag: maxLag)
+        #expect(later.end == 800 + 4_800 && later.validEnd == 800, "slides into silence")
+        // New audio starts from its own first frame, with nothing from before the stop.
+        #expect(playhead.advance(to: 0.6, state(1_600), maxLag: maxLag) == .init(end: 800, validEnd: 1_600, floor: 800))
+        #expect(playhead.advance(to: 0.61, state(1_600), maxLag: maxLag).end == 1_280)
+    }
+
+    @Test func sampleRateChangeSkipsTheOldRate() {
+        var playhead = AudioPlayhead()
+        _ = playhead.advance(to: 0, state(4_800), maxLag: maxLag)
+        let window = playhead.advance(to: 0.01, state(9_000, rate: 44_100, rateStart: 4_800), maxLag: maxLag)
+        #expect(window.end == 4_800 + 441)
+    }
+
+    @Test func aClockGoingBackIsNoTimePassing() {
+        var playhead = AudioPlayhead()
+        _ = playhead.advance(to: 5, state(4_800), maxLag: maxLag)
+        #expect(playhead.advance(to: 5.01, state(4_800), maxLag: maxLag).end == 480)
+        #expect(playhead.advance(to: 0, state(4_800), maxLag: maxLag).end == 480)
+        #expect(playhead.advance(to: 0.01, state(4_800), maxLag: maxLag).end == 960)
     }
 }
 
@@ -54,8 +144,110 @@ struct AudioAnalyzerTests {
                 phase += 2 * .pi * hz / sampleRate
             }
             buffer.withUnsafeBufferPointer { ring.write(samples: $0, channels: 2, sampleRate: sampleRate) }
-            analyzer.update(from: ring, fps: 60)
+            // The clock in step with the audio: one video frame per 800 samples.
+            analyzer.update(from: ring, time: Double(ring.state().written) / sampleRate, fps: 60)
         }
+    }
+
+    /// A 48 kHz test signal, interleaved stereo: `amplitude` at 220 Hz on the left, half that on the right.
+    private func tone(frames: Int, from start: Int = 0, amplitude: Float = 0.5) -> [Float] {
+        (start..<(start + frames)).flatMap { i -> [Float] in
+            let s = amplitude * Float(sin(2 * .pi * 220 * Double(i) / 48_000))
+            return [s, s / 2]
+        }
+    }
+
+    private struct Snapshot: Equatable {
+        var waveLeft, waveRight, spectrumLeft, spectrumRight: [Float]
+        var levels: AudioLevels
+
+        init(_ analyzer: AudioAnalyzer) {
+            waveLeft = analyzer.waveLeft
+            waveRight = analyzer.waveRight
+            spectrumLeft = analyzer.spectrumLeft
+            spectrumRight = analyzer.spectrumRight
+            levels = analyzer.levels
+        }
+    }
+
+    /// The window depends on the timeline, not on how the audio was chunked: 100 ms fed at once analyzes exactly as
+    /// the same audio fed in 100 small pieces as each falls due.
+    @Test func oneLargeChunkMatchesManySmallOnes() {
+        let audio = tone(frames: 4_800)
+        let renders = 10  // past the end of the audio, so the underrun is compared too
+
+        let bigRing = AudioRing(), big = AudioAnalyzer()
+        audio.withUnsafeBufferPointer { bigRing.write(samples: $0, channels: 2, sampleRate: 48_000) }
+        var expected: [Snapshot] = []
+        for frame in 0..<renders {
+            big.update(from: bigRing, time: Double(frame) / 60, fps: 60)
+            expected.append(Snapshot(big))
+        }
+
+        let smallRing = AudioRing(), small = AudioAnalyzer()
+        var fed = 0, chunks = 0
+        var actual: [Snapshot] = []
+        for frame in 0..<renders {
+            // 48-frame (1 ms) pieces, each fed once it has started playing by this render's time.
+            while fed < 4_800 && fed <= frame * 800 {
+                audio[(fed * 2)..<((fed + 48) * 2)].withUnsafeBufferPointer {
+                    smallRing.write(samples: $0, channels: 2, sampleRate: 48_000)
+                }
+                fed += 48
+                chunks += 1
+            }
+            small.update(from: smallRing, time: Double(frame) / 60, fps: 60)
+            actual.append(Snapshot(small))
+        }
+        #expect(chunks == 100)
+        #expect(actual == expected)
+        #expect(expected[3].waveLeft != expected[4].waveLeft, "the big chunk plays out over several renders")
+        #expect(big.window.end == 4_800)
+    }
+
+    /// Running out holds the last window, and the next audio plays on from where it left off.
+    @Test func underrunHoldsTheLastWindow() {
+        let ring = AudioRing(), analyzer = AudioAnalyzer()
+        tone(frames: 1_600).withUnsafeBufferPointer { ring.write(samples: $0, channels: 2, sampleRate: 48_000) }
+        for frame in 0..<3 { analyzer.update(from: ring, time: Double(frame) / 60, fps: 60) }
+        let held = analyzer.waveLeft
+        #expect(analyzer.window.end == 1_600)
+        for frame in 3..<8 {
+            analyzer.update(from: ring, time: Double(frame) / 60, fps: 60)
+            #expect(analyzer.waveLeft == held)
+        }
+        tone(frames: 800, from: 1_600).withUnsafeBufferPointer {
+            ring.write(samples: $0, channels: 2, sampleRate: 48_000)
+        }
+        analyzer.update(from: ring, time: 8.0 / 60, fps: 60)
+        #expect(analyzer.window.end == 2_400)
+    }
+
+    /// A host that stops feeding: after the hold, the waveform and spectrum fall to zero and the levels go the way
+    /// they do for fed silence (0, then "normal" once the long-term average has died away).
+    @Test func stoppedFeedDecaysToSilence() {
+        let ring = AudioRing(), analyzer = AudioAnalyzer()
+        var frame = 0
+        func render() {
+            analyzer.update(from: ring, time: Double(frame) / 60, fps: 60)
+            frame += 1
+        }
+        for _ in 0..<60 {
+            tone(frames: 800, from: frame * 800).withUnsafeBufferPointer {
+                ring.write(samples: $0, channels: 2, sampleRate: 48_000)
+            }
+            render()
+        }
+        #expect(analyzer.waveLeft.map(abs).max() ?? 0 > 30)
+        #expect(analyzer.levels.bass > 0.5)
+        for _ in 0..<10 { render() }  // within the hold
+        #expect(analyzer.waveLeft.map(abs).max() ?? 0 > 30)
+        for _ in 0..<20 { render() }  // past the hold and a window's length
+        #expect(analyzer.waveLeft.allSatisfy { $0 == 0 })
+        #expect(analyzer.spectrumLeft.allSatisfy { $0 == 0 })
+        #expect(analyzer.levels.bass == 0 && analyzer.levels.mid == 0 && analyzer.levels.treb == 0)
+        for _ in 0..<3_000 { render() }
+        #expect(analyzer.levels == AudioLevels())
     }
 
     /// As in MilkDrop, silence reads as 0 at first, then as "normal" once the long-term average has died away.
@@ -364,7 +556,35 @@ struct MilkRendererTests {
 
     @Test func rejectsFormatsALayerCannotShow() throws {
         let device = try #require(MTLCreateSystemDefaultDevice())
-        #expect(throws: MilkRendererError.self) { try MilkRenderer(device: device, pixelFormat: .r8Unorm) }
+        #expect(throws: MilkRendererError.unsupportedPixelFormat(.r8Unorm)) {
+            try MilkRenderer(device: device, pixelFormat: .r8Unorm)
+        }
+        #expect("\(MilkRendererError.unsupportedPixelFormat(.r8Unorm))".contains("r8Unorm"))
+    }
+
+    /// `MilkPreset(contentsOf:)` throws only `MilkPresetError`, naming the file.
+    @Test func presetErrorsNameTheFile() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("MilkPresetErrors-\(UUID())")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+
+        let missing = folder.appendingPathComponent("missing.milk")
+        do {
+            _ = try MilkPreset(contentsOf: missing)
+            Issue.record("a missing file loaded")
+        } catch {
+            guard case .unreadableFile(let url, _) = error else { Issue.record("\(error)"); return }
+            #expect(url == missing)
+            #expect(error.description.contains("missing.milk"))
+        }
+
+        let empty = folder.appendingPathComponent("empty.milk")
+        try Data("[preset00]\n\n".utf8).write(to: empty)
+        #expect(throws: MilkPresetError.empty(empty)) { try MilkPreset(contentsOf: empty) }
+
+        let bundle = folder.appendingPathComponent("hollow.milkpreset")
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        #expect(throws: MilkPresetError.bundleMissingPreset(bundle)) { try MilkPreset(contentsOf: bundle) }
     }
 }
 

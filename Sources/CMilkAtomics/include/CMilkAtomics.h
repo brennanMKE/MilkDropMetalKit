@@ -19,4 +19,9 @@ static inline void cma_fence_acquire(void) {
     atomic_thread_fence(memory_order_acquire);
 }
 
+/// Orders earlier stores before later stores (seqlock writer pattern: announce, fence, write the data).
+static inline void cma_fence_release(void) {
+    atomic_thread_fence(memory_order_release);
+}
+
 #endif

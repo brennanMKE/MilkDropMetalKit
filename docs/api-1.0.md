@@ -1,8 +1,9 @@
 # 1.0 API review
 
 Milestone 7 (handoff §6): a stable, documented API and a tagged release that Roadie can depend on. This page stages
-that decision for the owner. The non-breaking documentation items are applied (marked **Done** below); everything
-else is still a proposal awaiting the owner's decision.
+that decision for the owner. The non-breaking documentation items are applied (marked **Done** below), as are F2
+and F5, which the owner approved as breaking changes before 1.0; everything else is still a proposal awaiting the
+owner's decision.
 
 Reviewed at `ce8d9c1` (M5 transitions committed) plus the uncommitted M6 compatibility runner, 2026-10-29. The
 public symbols were listed with `swift-symbolgraph-extract -minimum-access-level public`.
@@ -22,7 +23,7 @@ A dash marks a public symbol with no doc comment.
 | Symbol | Kind | Notes |
 |---|---|---|
 | `MilkRenderer` | `@MainActor final class` | `MilkRenderer.swift:27` |
-| `init(device:pixelFormat:) throws` | init | — no doc. Accepts `bgra8Unorm`, `bgra8Unorm_srgb`, `rgba16Float`, `rgb10a2Unorm`, `bgr10a2Unorm` (`:242`) |
+| `init(device:pixelFormat:) throws(MilkRendererError)` | init | Typed throws since F2. Accepts `bgra8Unorm`, `bgra8Unorm_srgb`, `rgba16Float`, `rgb10a2Unorm`, `bgr10a2Unorm` (`:242`) |
 | `device: MTLDevice`, `pixelFormat: MTLPixelFormat` | `let` | — no doc |
 | `preset: MilkPreset?` | get | |
 | `presetErrors: [String]` | get | Free-form text (`:35`) |
@@ -31,16 +32,16 @@ A dash marks a public symbol with no doc comment.
 | `compilesShadersInBackground: Bool` | var | Default `true` (`:50`) |
 | `isCompilingShaders: Bool` | get | |
 | `meshSize: (width: Int, height: Int)` | var | Clamped to 1…512 in `didSet` (`:54`) |
-| `feed(samples:channels:sampleRate:)` | `nonisolated` func | `:248` |
+| `feed(samples:channels:sampleRate:)` | `nonisolated` func | Any chunk size; the renderer paces it (F5) |
 | `load(_:transition:) throws` | func | Never actually throws today (`:258`) |
 | `render(to:commandBuffer:time:)` | func | `:270` |
 | `reset()` | func | Back to a new renderer's state (feedback, clock, audio, random sequence, transition); the preset stays loaded and restarts. Added 2026-10-29 |
-| `MilkRendererError` | enum | `unsupportedPixelFormat(MTLPixelFormat.RawValue)`, `shaderCompilation(String)`, `resourceCreation(String)`. — no doc |
-| `MilkPreset` | `Sendable` struct | `name`, `model: PresetModel` (both — no doc), `init(name:model:)` (—), `init(contentsOf:) throws` (`.milk` or `.milkpreset` bundle) |
-| `MilkPresetError` | enum | `bundleMissingPreset`. Enum itself — no doc |
+| `MilkRendererError` | enum | `unsupportedPixelFormat(MTLPixelFormat)`, `noCommandQueue`, `pipelineCompilation(function:message:)`, `resourceCreation(resource:)` (F2) |
+| `MilkPreset` | `Sendable` struct | `name`, `model: PresetModel` (both — no doc), `init(name:model:)` (—), `init(contentsOf:) throws(MilkPresetError)` (`.milk` or `.milkpreset` bundle) |
+| `MilkPresetError` | enum | `unreadableFile(URL, reason:)`, `unreadableText(URL)`, `empty(URL)`, `bundleMissingPreset(URL)`; `url` (F2) |
 | `MilkTransitionPattern` | `Sendable, CaseIterable` enum | `random`, `crossfade`, `wipe`, `plasma`, `radial` (`Transitions.swift:5`) |
-| `MilkView` | `@MainActor final class: NSView` | `renderer` (—), `init(renderer:frame:) throws` (—), and four `NSView` overrides |
-| `MilkViewError` | enum | `noCommandQueue`. — no doc |
+| `MilkView` | `@MainActor final class: NSView` | `renderer` (—), `init(renderer:frame:) throws(MilkRendererError)` (—), and four `NSView` overrides |
+| ~~`MilkViewError`~~ | — | Removed: folded into `MilkRendererError.noCommandQueue` (F2) |
 
 ### MilkPresetFormat
 
@@ -74,7 +75,7 @@ A dash marks a public symbol with no doc comment.
 |---|---|
 | Stereo `feed` from a tap block: nonisolated, allocation-free, lock-free | **Yes.** `AudioRing` is SPSC with acquire/release atomics. But it is **single-producer**, and the public doc doesn't say so (F4) |
 | Tap delivers `AVAudioPCMBuffer` (planar Float32) | **Partly.** `feed` takes interleaved samples only, so the host needs a preallocated interleave buffer in the tap (F9) |
-| Tap delivers large chunks (often ~100 ms regardless of `bufferSize`) | **Not in the library.** The analyzer reads the newest 1,024 frames at render time, so one 4,800-frame chunk is seen as the same window for ~6 frames. The Gallery works around it with a sink drained by a 120 Hz main-thread timer (`AudioPlayer.swift:8-12`). Roadie would have to copy that (F5) |
+| Tap delivers large chunks (often ~100 ms regardless of `bufferSize`) | **Yes (F5, done).** The renderer plays fed audio out against its render clock, so a tap can call `feed` with each buffer as it arrives. The Gallery's tap now does exactly that |
 | Remote playback: no PCM, render sensibly in silence | **Yes.** Silence reads as level 1.0 (`AudioAnalyzer.swift:125`), tested by `longSilenceReadsAsNormal` and `silenceDrawsTheDefaultWaveCircle` |
 | Separate resizable window, full screen, next/previous/random, browser | **Yes, host side.** `MilkView` + `load(_:transition:)`. No pause or frame-rate control on `MilkView` (F10) |
 | Users add a folder of `.milk` files (runtime translation) | **Yes.** `MilkPreset(contentsOf:)` translates at load. It's `Sendable`, so a browser can parse off the main actor |
@@ -167,6 +168,19 @@ and `CustomStringConvertible` + `LocalizedError` conformances (so `localizedDesc
 `MilkRenderer.supportedPixelFormats` is `public nonisolated static let`. `MilkPreset(contentsOf:)` documents what it
 throws. **Still open (owner):** case renames, associated-value changes, folding `MilkViewError` into
 `MilkRendererError`, and mapping `PresetParseError` to `MilkPresetError`.
+*Status:* **Done (2026-10-29, owner-approved breaking change).** As proposed, with these choices:
+- `MilkRendererError`: `unsupportedPixelFormat(MTLPixelFormat)`, `noCommandQueue` (from `MilkRenderer.init` and
+  `MilkView.init`; `MilkViewError` is gone), `pipelineCompilation(function:message:)` (was `shaderCompilation`),
+  `resourceCreation(resource:)`. The description names the pixel format.
+- `MilkPresetError`: every case carries the file. `unreadableFile(URL, reason: String)` replaces the `CocoaError`
+  that used to escape (`reason` is the system's text), `unreadableText(URL)` and `empty(URL)` replace
+  `PresetParseError`, `bundleMissingPreset(URL)` names the bundle. A `url` property returns the file for any case.
+  No case carries a line number: the parser skips lines it doesn't understand instead of failing, so nothing has a
+  line to report (equation and shader errors go to `presetErrors`).
+- Typed throws make the contract checkable: `MilkPreset.init(contentsOf:) throws(MilkPresetError)`,
+  `MilkRenderer.init(device:pixelFormat:)` and `MilkView.init(renderer:frame:)` `throws(MilkRendererError)`.
+  `load(_:transition:)` keeps an untyped `throws` (F17). A host catches only MilkMetal's types.
+- Both keep `CustomStringConvertible` + `LocalizedError`, and their docs say to switch with a `default`.
 
 **F3. Document and check the `render(to:commandBuffer:time:)` contract.** (`MilkRenderer.swift:269-280`)
 Several requirements aren't written down:
@@ -198,9 +212,9 @@ are dropped, a `sampleRate` change applies to the whole window, and it holds 4,0
 public nonisolated func feed(samples: UnsafeBufferPointer<Float>, channels: Int, sampleRate: Double)
 ```
 
-*Status:* **Done.** The `feed` doc comment states single-producer, the ring size, channel handling and the 1,024-frame
-window, plus a short pacing note from F5 (feed small chunks; large tap buffers make visuals step). Behaviour is
-unchanged; F5 itself is still open.
+*Status:* **Done.** The `feed` doc comment states single-producer, the ring size (now 65,536 frames), channel
+handling and the 1,024-frame window. Since F5 it also states the pacing rules (any chunk size; hold, silence,
+latency bound, sample-rate changes).
 
 **F5. Decide where audio pacing lives before Roadie copies the Gallery's workaround.** (`AudioPlayer.swift:8-12`,
 `AudioAnalyzer.swift:76`)
@@ -211,6 +225,20 @@ twice.
 *Proposal:* decide now. Either (a) document that hosts feed audio "as it plays" and publish the Gallery's sink as a
 recipe, or (b) add internal pacing in 1.0, with `feed` documented as "any chunk size, in playback order". (b) is
 better for Roadie, which plans to call `feed` straight from the tap block.
+*Status:* **Done (2026-10-29): option (b).** `feed` takes any chunk size in playback order and the renderer paces
+it (`AudioPlayhead.swift`). The ring holds 65,536 frames, indexed by stream position. At each `render` a playhead
+advances by the render clock's elapsed `time` at the stream's sample rate, and the analyzer reads the 1,024 frames
+ending there, not the newest written. Playback starts at the first frame fed, so a 4,800-frame chunk plays out over
+six frames at 60 fps. Underrun holds the last window (and the delay it adds absorbs the host's jitter); after
+0.25 s with no audio it slides into silence, so the waveform falls flat and the levels decay as for fed silence.
+At most 0.25 s waits ahead of the playhead; more drops the oldest. A sample-rate change drops the unplayed audio at
+the old rate. A clock that goes backwards counts as no time passing. `feed` still never allocates, locks or
+blocks; the writer now announces each write before storing samples (a seqlock), so the reader can detect a lap.
+The Gallery's paced `TapSink` and 120 Hz feeding timer are gone: its tap feeds `feed` directly, and a 10 Hz timer
+feeds only the built-in beat (none of it while a file is loaded) and updates the transport position.
+Behaviour change: a host that feeds just in time (one frame's audio before each `render`, as `milkview-demo` does)
+now sees each window one frame later. A host that already paced its feed is not paced twice: just-in-time audio
+plays straight through with a constant one-chunk delay.
 
 ### Should fix
 
@@ -294,8 +322,8 @@ Items 1, 2 and 4 are **done** in the README's Usage section.
    the view is placed.
 2. "it never allocates or locks" (`feed`) is true, but the snippet says "on any thread" and leaves out *one thread at
    a time* (F4).
-3. "MilkDrop Gallery … feeding it from AVAudioEngine (`AudioPlayer.swift`)" is accurate. Add that it paces the tap's
-   chunks with a 120 Hz timer, which is why it isn't a direct tap-to-`feed` example (F5).
+3. "MilkDrop Gallery … feeding it from AVAudioEngine (`AudioPlayer.swift`)" is accurate. **Done:** since F5 its tap
+   feeds the renderer directly, and the README says so.
 4. "To draw into your own Metal layer, call `render(to:commandBuffer:time:)`" should add: the texture's format must
    match, and you must commit the command buffer (F3).
 5. Status and roadmap mark **Transitions (done)**. M5 is committed (`ce8d9c1`), but whether its tests passed in the
@@ -352,7 +380,8 @@ read presets on a background task and hand them to the renderer on the main acto
 
 ### Audio
 
-Feed interleaved Float32 PCM as it plays. Stereo is expected; mono is duplicated. With no audio (paused, or playing
+Feed interleaved Float32 PCM in playback order, in chunks of any size (straight from an audio tap): the renderer
+plays it out in step with its frames. Stereo is expected; mono is duplicated. With no audio (paused, or playing
 on another device) presets keep moving: silence reads as normal levels.
 
 ### Errors and fallbacks
@@ -423,7 +452,7 @@ explained in that release's notes.
 
 Owner approval is needed for the items marked ✱.
 
-1. ✱ Decide F1–F5, and land the accepted fixes plus F10 (it changes a type) in `Sources/` once the M5 and M6 agents
+1. ✱ Decide F1–F5 (F2–F5 done; F1 open), and land the accepted fixes plus F10 (it changes a type) in `Sources/` once the M5 and M6 agents
    are done.
 2. Doc comments on every public symbol (F12). `swift build` is clean with no warnings. Re-run
    `swift-symbolgraph-extract` and check the inventory in §1 against the result.
