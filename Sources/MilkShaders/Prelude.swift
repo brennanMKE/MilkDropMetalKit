@@ -149,6 +149,13 @@ enum Prelude {
         static float3x3 milk_cdiv(float3x3 a, float3x3 b) { return float3x3(a[0] / b[0], a[1] / b[1], a[2] / b[2]); }
         static float4x4 milk_cdiv(float4x4 a, float4x4 b) { return float4x4(a[0] / b[0], a[1] / b[1], a[2] / b[2], a[3] / b[3]); }
 
+        // Direct3D 9 divides as a * rcp(b) and takes 0 * anything as 0: 0 / 0 is 0, not NaN. x / 0 stands in as
+        // ±FLT_MAX rather than infinity, so a later 0 * (x / 0) is 0 as on Direct3D 9 instead of NaN (black). Written
+        // with selects on the operands so fast math can't fold the cases away.
+        template <typename T> static T milk_div(T a, T b) {
+            T q = select(a / select(b, T(1), b == T(0)), copysign(T(FLT_MAX), a), b == T(0));
+            return select(q, T(0), a == T(0));
+        }
         template <typename T> static T milk_modf(T x, thread T &whole) { whole = trunc(x); return x - whole; }
         template <typename T> static void milk_sincos(T x, thread T &s, thread T &c) { s = sin(x); c = cos(x); }
         static void milk_clip(float x) { if (x < 0) discard_fragment(); }

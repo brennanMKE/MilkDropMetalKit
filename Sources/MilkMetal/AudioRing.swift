@@ -56,6 +56,14 @@ final class AudioRing: @unchecked Sendable {
         cma_store_release(written, total)
     }
 
+    /// Forgets every frame written, as if the ring were new. Not synchronised with `write`: a write racing it
+    /// leaves some of its frames in place (harmless, but then the ring isn't exactly as new).
+    func clear() {
+        cma_store_release(written, 0)
+        left.update(repeating: 0, count: capacity)
+        right.update(repeating: 0, count: capacity)
+    }
+
     /// Consumer side. Copies the newest `count` frames per channel (oldest first) and returns how many were
     /// available; earlier slots are zero-filled when fewer than `count` frames have ever been written.
     @discardableResult

@@ -91,6 +91,15 @@ func runCompat(_ options: Options) {
 
     let watchdog = CompatWatchdog(report: report, limit: options.timeout)
     let started = Date()
+    // One renderer for the whole run, reset before each preset: `reset()` makes it draw what a new renderer would
+    // (checked frame for frame against new renderers on 771 presets).
+    let renderer: MilkRenderer
+    do {
+        renderer = try MilkRenderer(device: device, pixelFormat: .rgba16Float)
+    } catch {
+        fail("cannot make a renderer: \(error)")
+    }
+    renderer.compilesShadersInBackground = false
     for (i, preset) in todo.enumerated() {
         do {
             try Data((preset + "\n").utf8).write(to: sidecar)
@@ -99,7 +108,7 @@ func runCompat(_ options: Options) {
         }
         watchdog.begin(preset)
         let result = autoreleasepool {
-            compatRender(dir.appendingPathComponent(preset), name: preset, device: device, queue: queue,
+            compatRender(dir.appendingPathComponent(preset), name: preset, renderer: renderer, queue: queue,
                          options: options, watchdog: watchdog)
         }
         do {
@@ -132,19 +141,18 @@ func runCompat(_ options: Options) {
     }
 }
 
-/// Loads and renders one preset. A fresh renderer each time: `MilkRenderer` keeps the feedback image, frame
-/// counter and random sequence across `load`, so reusing one would make a preset's result depend on the presets
-/// before it (and on where a restart picked up).
+/// Loads and renders one preset with `renderer`, reset first so the result doesn't depend on the presets before
+/// it (or on where a restart picked up): `MilkRenderer` keeps the feedback image, frame counter and random sequence
+/// across `load`.
 @MainActor
-func compatRender(_ url: URL, name: String, device: MTLDevice, queue: MTLCommandQueue, options: Options,
+func compatRender(_ url: URL, name: String, renderer: MilkRenderer, queue: MTLCommandQueue, options: Options,
                   watchdog: CompatWatchdog) -> CompatResult {
     var result = CompatResult(preset: name)
     let (width, height) = (options.width, options.height)
-    let renderer: MilkRenderer
+    let device = renderer.device
     let loadStart = ProcessInfo.processInfo.systemUptime
     do {
-        renderer = try MilkRenderer(device: device, pixelFormat: .rgba16Float)
-        renderer.compilesShadersInBackground = false
+        renderer.reset()
         try renderer.load(MilkPreset(contentsOf: url))
     } catch {
         result.failures = [.loadFailed]

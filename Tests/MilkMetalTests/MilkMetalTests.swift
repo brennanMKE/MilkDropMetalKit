@@ -318,6 +318,21 @@ struct MilkRendererTests {
         #expect(pixels[1] == 0)
     }
 
+    /// Direct3D 9 arithmetic where IEEE gives NaN (which the 8-bit feedback and the output store as black):
+    /// 0 / 0 is 0, (x / 0) * 0 is 0, pow and log use |x|. q1 and q2 are 0 at run time, so nothing folds.
+    @Test func shaderArithmeticFollowsDirect3D9() throws {
+        let text = """
+            [preset00]
+            comp_1=`shader_body { float z = q1; float n = q2 - 0.25;
+            comp_2=`  ret = float3(1 + z / z + (0.5 / z) * q2, exp2(log2(n) * 0.5), pow(n, 0.5)); }
+            """
+        let preset = MilkPreset(name: "d3d9", model: try PresetModel(text: text))
+        let pixels = try render(preset, frames: 2)
+        #expect(pixels[2] == 255, "red: \(pixels[2])")  // BGRA
+        #expect((126...129).contains(pixels[1]), "green: \(pixels[1])")
+        #expect((126...129).contains(pixels[0]), "blue: \(pixels[0])")
+    }
+
     @Test func loadsAConvertedBundle() throws {
         let bundle = FileManager.default.temporaryDirectory.appendingPathComponent("bundle-\(UUID().uuidString).milkpreset")
         try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
@@ -455,6 +470,59 @@ struct TransitionTests {
         try renderer.load(solid("0, 0, 1"))
         #expect(!renderer.isTransitioning)
         #expect(try render(renderer, frames: 3..<4, into: texture, queue: queue) == [255, 0, 0, 255])
+    }
+
+    /// Renders frames `range` at 60 fps, feeding a tone before each; returns the whole last frame (BGRA).
+    private func renderWithTone(_ renderer: MilkRenderer, frames range: Range<Int>, into texture: MTLTexture,
+                                queue: MTLCommandQueue) throws -> [UInt8] {
+        for frame in range {
+            let samples = (0..<800).flatMap { i -> [Float] in
+                let t = Double(frame * 800 + i) / 48_000
+                return [Float(0.5 * sin(2 * .pi * 220 * t)), Float(0.4 * sin(2 * .pi * 90 * t))]
+            }
+            samples.withUnsafeBufferPointer { renderer.feed(samples: $0, channels: 2, sampleRate: 48_000) }
+            let commandBuffer = try #require(queue.makeCommandBuffer())
+            renderer.render(to: texture, commandBuffer: commandBuffer, time: Double(frame) / 60)
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+        }
+        var pixels = [UInt8](repeating: 0, count: texture.width * texture.height * 4)
+        texture.getBytes(&pixels, bytesPerRow: texture.width * 4,
+                         from: MTLRegionMake2D(0, 0, texture.width, texture.height), mipmapLevel: 0)
+        return pixels
+    }
+
+    /// A used renderer, reset, draws exactly what a new one does: feedback, clock, audio, randomness and the
+    /// preset's own variables all start again, and a transition in progress is dropped.
+    @Test func resetMatchesANewRenderer() throws {
+        let presets = repoRoot.appendingPathComponent("Presets")
+        let files = try FileManager.default.contentsOfDirectory(at: presets, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "milk" }.sorted { $0.path < $1.path }
+        let first = try MilkPreset(contentsOf: presets.appendingPathComponent("spike-tunnel.milk"))
+        let second = try MilkPreset(contentsOf: try #require(files.last))
+
+        let (fresh, freshTexture, queue) = try setUp()
+        try fresh.load(second)
+        let expected = try renderWithTone(fresh, frames: 0..<40, into: freshTexture, queue: queue)
+        #expect(expected.indices.contains { $0 % 4 != 3 && expected[$0] > 40 }, "draws something")
+
+        // Used, mid-transition, then reset and loaded.
+        let (used, texture, _) = try setUp()
+        try used.load(first)
+        _ = try renderWithTone(used, frames: 0..<25, into: texture, queue: queue)
+        try used.load(second, transition: 2)
+        _ = try renderWithTone(used, frames: 25..<35, into: texture, queue: queue)
+        #expect(used.isTransitioning)
+        used.reset()
+        #expect(!used.isTransitioning)
+        try used.load(second)
+        #expect(try renderWithTone(used, frames: 0..<40, into: texture, queue: queue) == expected)
+
+        // Reset with the preset still loaded starts it again from its init equations.
+        _ = try renderWithTone(used, frames: 0..<7, into: texture, queue: queue)
+        used.reset()
+        #expect(used.preset?.name == second.name)
+        #expect(try renderWithTone(used, frames: 0..<40, into: texture, queue: queue) == expected)
     }
 
     /// Two gallery presets with waves, shapes and shaders, through a random pattern, twice: same pixels.

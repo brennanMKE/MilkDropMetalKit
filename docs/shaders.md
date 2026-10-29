@@ -34,7 +34,13 @@ instead:
    - mixed vector sizes in operations truncate to the smaller, as fxc does;
    - `%` on floats becomes `fmod`, and `lerp`/`frac`/`ddx`/`rsqrt`… become their MSL names;
    - `sincos`, `modf` and `clip` become small helpers;
-   - a uniform the shader assigns (`q25 = q24;`) becomes a local copy.
+   - a uniform the shader assigns (`q25 = q24;`) becomes a local copy;
+   - Direct3D 9 arithmetic where IEEE would give NaN, which the 8-bit feedback stores as black: `log`, `log2`,
+     `log10` and `pow` take the absolute value of their (first) operand, as shader model 2/3's `log` and `pow`
+     instructions do; float `/` becomes `milk_div`, where 0 / 0 is 0 (D3D9 takes 0 × ∞ as 0) and x / 0 is
+     ±`FLT_MAX` rather than infinity, so a later `* 0` still gives 0. Constant integer division (`1 / 2`) still
+     truncates. D3D9's `rsq` also takes |x|, but `sqrt`/`rsqrt` keep IEEE semantics: with |x| two presets that draw
+     today (`Fractal/Nested Circle/… soft death`) went black. See [compatibility.md](compatibility.md).
 
 ### Representation choices
 
@@ -44,7 +50,8 @@ instead:
   builds the transpose. Then `m[i]` is still row i, `mul(a, b)` becomes `(b * a)`, and componentwise `*` on two
   matrices becomes `milk_cmul`.
 - **Samplers.** `sampler_[fw_|fc_|pw_|pc_]NAME` becomes a texture plus a sampler state: filtered or point, wrap or
-  clamp. Unprefixed `sampler_main` uses the preset's `bTexWrap`.
+  clamp. Unprefixed `sampler_main` (and `GetPixel`/`GetMain`) uses the preset's `bTexWrap` in the warp shader and is
+  filtered and wrapping in the composite, like MilkDrop 2's other unprefixed samplers.
 - **Uniforms** live in one `MilkUniforms` buffer. Functions that read uniforms, textures or mutable globals get them
   as extra parameters, since MSL has no mutable or texture globals. HLSL requires functions to be defined before use,
   so one pass collects what each function needs.

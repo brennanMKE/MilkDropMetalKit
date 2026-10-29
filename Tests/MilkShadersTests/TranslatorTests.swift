@@ -50,6 +50,21 @@ struct TranslatorTests {
         #expect(source.contains("tex_noise_lq.sample(milk_fc, v_uv)"))
     }
 
+    @Test func unprefixedSamplerMainWrapsInTheComposite() throws {
+        // The composite binds unprefixed sampler_main (and GetPixel) filtered and wrapping, whatever bTexWrap says;
+        // the warp keeps the renderer's bTexWrap sampler.
+        let text = "shader_body { ret = tex2D(sampler_main, uv * 3).xyz + GetPixel(uv + 1) + tex2D(sampler_fc_main, uv).xyz; }"
+        let composite = try msl(text, stage: .composite)
+        #expect(composite.contains("tex_main.sample(milk_fw, (v_uv * 3.0))"))
+        #expect(composite.contains("tex_main.sample(milk_fw, (v_uv + 1.0))"))
+        #expect(composite.contains("tex_main.sample(milk_fc, v_uv)"))
+        #expect(!composite.contains("sample(smp_main"))
+        let warp = try msl(text, stage: .warp)
+        #expect(warp.contains("tex_main.sample(smp_main, (v_uv * 3.0))"))
+        #expect(warp.contains("tex_main.sample(milk_fc, v_uv)"))
+        try compiles(text, stage: .composite)
+    }
+
     @Test func userTexturesGetSlots() throws {
         let shader = try ShaderTranslator.translate("""
             sampler sampler_clouds2;
@@ -119,6 +134,34 @@ struct TranslatorTests {
             }
             """
         try compiles(text, stage: .composite)
+    }
+
+    @Test func logAndPowTakeTheAbsoluteValueLikeDirect3D9() throws {
+        // Shader model 2/3's log and pow use |x|: pow(-0.25, 0.5) is 0.5, not NaN (which the 8-bit feedback stores
+        // as black). sqrt and rsqrt keep IEEE semantics: taking |x| there too fixed some presets but turned two that
+        // drew (Fractal/Nested Circle/… soft death) black, so it was left out.
+        let text = "shader_body { float3 a = sqrt(uv.x - 0.5) + rsqrt(-uv.y) + log(-2) + log2(uv.x) + log10(uv.y); ret = pow(a - 1, 1.5); }"
+        let source = try msl(text)
+        #expect(source.contains("sqrt((v_uv.x - 0.5))"))
+        #expect(source.contains("rsqrt((-v_uv.y))"))
+        #expect(source.contains("log(abs(-2.0))"))
+        #expect(source.contains("log2(abs(v_uv.x))"))
+        #expect(source.contains("log10(abs(v_uv.y))"))
+        #expect(source.contains("pow(abs((v_a - 1.0)), float3(1.5))"))
+        // Other functions keep their operands.
+        #expect(try msl("shader_body { ret = exp(-uv.x) + abs(-uv.y); }").contains("(exp((-v_uv.x)) + abs((-v_uv.y)))"))
+        try compiles(text)
+    }
+
+    @Test func floatDivisionFollowsDirect3D9() throws {
+        // 0 / 0 is 0 and x / 0 is finite, so a later * 0 gives 0 rather than NaN; constant ints still truncate.
+        let text = "shader_body { float2 a = uv / uv.x; float b = 1 / q1; b /= 2; int i = 7 / 2; ret = a.x + b * q2 + i; }"
+        let source = try msl(text)
+        #expect(source.contains("float2 v_a = milk_div(v_uv, float2(v_uv.x))"))
+        #expect(source.contains("float v_b = milk_div(1.0, u.q[0].x)"))
+        #expect(source.contains("v_b = milk_div(v_b, 2.0)"))
+        #expect(source.contains("int v_i = (7 / 2)"))
+        try compiles(text)
     }
 
     @Test func reportsSyntaxErrors() {

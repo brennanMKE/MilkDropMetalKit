@@ -37,11 +37,12 @@ from handoff §7).
 
 ## What it does per preset
 
-1. A fresh `MilkRenderer` (`.rgba16Float` target, `compilesShadersInBackground = false`), then
-   `load(MilkPreset(contentsOf:))`. A fresh renderer every time because `load` keeps the feedback image, the frame
-   counter and the random sequence, so a reused one would make each result depend on the presets before it and on
-   where a restart picked up. A new renderer is cheap (Metal caches the fixed pipeline's library): the median
-   load, renderer included, was 10 ms in the full run.
+1. One `MilkRenderer` for the run (`.rgba16Float` target, `compilesShadersInBackground = false`), `reset()` before
+   each preset, then `load(MilkPreset(contentsOf:))`. `load` keeps the feedback image, the frame counter and the
+   random sequence, so without the reset each result would depend on the presets before it and on where a restart
+   picked up; `reset()` puts the renderer back as new (feedback, clock, audio, random sequence, transition), and a
+   check on 771 presets gave bit-identical frames to a new renderer per preset. Until 2026-10-29 the runner made a
+   new renderer per preset, so `loadMs` in older reports includes creating it.
 2. N frames at a fixed 60 fps clock, `SynthAudio` fed before each, `waitUntilCompleted` after each.
 3. Every Kth frame and the last are read back as `Float16` and checked by `FrameCheck`. The target is 16-bit float
    so NaN and infinity survive; an 8-bit target would turn them into black.
@@ -76,6 +77,7 @@ fail anything. Budget numbers need a real Mac; see the open decision in [testing
 
 | Date | Code | Presets | Frames, size | Passed | crash | timeout | load-failed | gpu-error | nan | black | Wall |
 |---|---|---|---|---|---|---|---|---|---|---|---|
+| 2026-10-29 | f0c051b + working tree | 9,795 (all of Cream of the Crop) | 300, 640x360 | **9,587 (97.88%)** | 0 | 0 | 0 | 0 | 0 | 208 | 5,860 s + reruns (see below) |
 | 2026-10-29 | f783c83 + M6 tooling (working tree) | 9,795 (all of Cream of the Crop) | 300, 640x360 | **9,532 (97.31%)** | 0 | 0 | 0 | 0 | 0 | 263 | 7,198 s |
 | 2026-10-29 | same | 196 (stride 50) | 120, 640x360 | 194 (98.98%) | 0 | 0 | 0 | 0 | 0 | 2 | 104 s |
 
@@ -89,7 +91,54 @@ recorded a `crash` for that preset (exit status 137) and finished the rest, whic
 A run with `--compat-timeout 2` and 3000 frames recorded a `timeout` for each of its 5 presets and restarted after
 each.
 
-### Black frames
+### Black frames: causes found and fixed (f0c051b + working tree)
+
+Each failing preset was rendered four ways in the VM: as is, without its composite shader, without its warp shader
+and without either, which says which pass produces the black. Then the suspects were checked against Direct3D 9,
+which MilkDrop 2's HLSL actually runs on, and against passing near-variants. Fixed, each with a unit test:
+
+| Cause | Presets fixed | Fix | Test |
+|---|---|---|---|
+| **0 / 0 and 0 × ∞ are NaN in IEEE, 0 in Direct3D 9.** Shaders divide by q variables the per-frame code never sets (the `moebius` remix family: `mu/(c*z+d)` with every q 0) or compute `.4/rad1 * … * q22` with both 0. The NaN reaches the 8-bit feedback or the output as black | ~38 (21 `moebius` remixes such as `Reaction/Automata/… re-m flx …` and `the green machine 2 …`; 9 `glassball dance` variants; others) | Float `/` emits `milk_div`: 0 / 0 is 0, x / 0 is ±`FLT_MAX` rather than ∞ so a later `* 0` is 0. Written with selects so fast math can't fold it | `TranslatorTests.floatDivisionFollowsDirect3D9`, `MilkRendererTests.shaderArithmeticFollowsDirect3D9` |
+| **`pow` and `log` of a negative are NaN in IEEE; D3D9's `pow`/`log` use \|x\|** | 5 (`… hog rot` remixes, `square_faces_v2_alt_colours`) | `pow`, `log`, `log2`, `log10` take `abs` of the (first) operand | `TranslatorTests.logAndPowTakeTheAbsoluteValueLikeDirect3D9`, `shaderArithmeticFollowsDirect3D9` |
+| **Unprefixed `sampler_main` in the composite clamped when `bTexWrap=0`.** MilkDrop 2 binds unprefixed samplers filtered and wrapping. `dotes hostile undertake` and `dinner - ratios …` presets read it at 1…4, which clamped to one edge texel | 12 | Composite: unprefixed `sampler_main`/`GetPixel` wrap. The warp keeps `bTexWrap` (below) | `TranslatorTests.unprefixedSamplerMainWrapsInTheComposite` |
+
+Tried and left out, because each turned passing presets black:
+
+- **`sqrt`/`rsqrt` of |x|** (D3D9's `rsq` takes |x| too). It fixed 7 (`Dancer/Blobby/suksma - floresiensis`, the
+  `crystal palace` remixes, `space gelatine burst …`, `empty flow - collab`) but turned `Fractal/Nested Circle/bdrv +
+  al Rovastar - Fractopia … soft death` and `… soft death roam3` black: their warp's `1/sqrt(uv6.y)` is NaN (black)
+  over half the screen in IEEE, and with |x| the feedback fills and their inverted composite (`1 - blur`) goes black.
+  Probably closer to MilkDrop, but a regression by this run's rule.
+- **Wrapping unprefixed `sampler_main` in the warp shader too.** It fixed 4 more (`suksma - biotoxins on strings …`,
+  `pladman visits the sevendys … nz`, `suksma - nontillion horrors`, `Fractopia … outsanitice`) but turned 4 black
+  (`cammy told me about yeast infected loaves roam`, `Bdrv Aderrasi - Accelerator … rmx8 …`, `amandio c - log tower 1
+  pig vomit …`, `Fractopia … divulgatticae roams`).
+
+How the row above was measured: the full run (`build/vm-tests/20261029-043441-80671`, 9,594 passed) had both of
+those in. After taking them out, every preset they can affect was rendered again: the 2,362 with `bTexWrap=0` whose
+warp shader reads `sampler_main` (`20261029-062820-37001`) and the 1,243 whose shaders call `sqrt`/`rsqrt`
+(`20261029-070416-54424`); every other preset's shaders are unchanged by them. Against the previous full run
+(`20261029-013948-87982`): **55 newly passing, 0 newly failing**. The runner itself now reuses one renderer with
+`reset()`; on 771 presets that gave bit-identical frames to a new renderer per preset.
+
+Left (208, all black). By the four-way ablation:
+
+- 44 are black whichever shaders run (2 of them transitions to black): e.g. the `Dancer/Tree Branch/shifter -
+  robotopia v2 …` family and `PieturP - sunflare` (textured shapes multiplying a black image). Several depend on the
+  starting image: MilkDrop carries the previous preset's image over, and this run starts from black.
+- About 18 go black only with their warp shader, which wipes the feedback (`ret -= 1 - q2` with q2 never set), and
+  only draw on beats (`fleekus flokus - … beat code experiment`), so frame 300 can land between flashes.
+- About 130 go black only with both shaders together, or only with the composite: the `Flexi - emergencey 2 ---
+  Isosceles edit*` reaction-diffusion family (from a black start the green channel fills to 1 everywhere and the
+  composite `lerp(white, 0, g)` shows black), `Dancer/Comet Mirror/226` (its composite samples one 26° wedge of a
+  fast-decaying image), the `Waveform/Wire Rising/1xx` family (`1/GetBlur2(…)` composite), `repressed americans -
+  mess roam` and `fed's FASTBLUR -frost -neural` (still black from about frame 210), and the ones dark by design
+  (`Flexi - evolution 6`, peak 0.0044).
+- Not tried: D3D9's 0 × ∞ = 0 for every multiply (only division is covered), `normalize(0)`, and a non-black starting
+  image.
+
+### Black frames (f783c83, before the fixes)
 
 All 263 failures are black frames, and they are mostly real rendering bugs, not presets that are dark by design:
 

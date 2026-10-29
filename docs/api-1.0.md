@@ -34,6 +34,7 @@ A dash marks a public symbol with no doc comment.
 | `feed(samples:channels:sampleRate:)` | `nonisolated` func | `:248` |
 | `load(_:transition:) throws` | func | Never actually throws today (`:258`) |
 | `render(to:commandBuffer:time:)` | func | `:270` |
+| `reset()` | func | Back to a new renderer's state (feedback, clock, audio, random sequence, transition); the preset stays loaded and restarts. Added 2026-10-29 |
 | `MilkRendererError` | enum | `unsupportedPixelFormat(MTLPixelFormat.RawValue)`, `shaderCompilation(String)`, `resourceCreation(String)`. — no doc |
 | `MilkPreset` | `Sendable` struct | `name`, `model: PresetModel` (both — no doc), `init(name:model:)` (—), `init(contentsOf:) throws` (`.milk` or `.milkpreset` bundle) |
 | `MilkPresetError` | enum | `bundleMissingPreset`. Enum itself — no doc |

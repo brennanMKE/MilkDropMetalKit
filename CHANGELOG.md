@@ -59,6 +59,13 @@ API. Requires macOS 14 and Swift 6. No third-party dependencies, no network acce
   resumable per-preset report and a pass-rate summary, and runs in the test VM.
 - Pass rate (2026-10-29, Cream of the Crop, all 9,795 presets, 300 frames at 640x360 in the VM): 9,532 passed (97.31%); every failure is a black frame (263); no crashes, timeouts, load failures or NaNs. Median preset 0.81 ms GPU, 0.48 ms CPU per frame (VM timing). See docs/compatibility.md.
 
+- `MilkRenderer.reset()`: puts a renderer back in a new one's state (feedback, clock, audio, random sequence,
+  transition) so it can be reused deterministically; the compatibility runner now uses one renderer and resets it.
+- Preset shaders follow Direct3D 9 arithmetic where IEEE gives NaN (black): float division makes 0 / 0 zero and
+  x / 0 finite, and `pow`/`log` take |x|. The composite reads unprefixed `sampler_main` wrapping, as MilkDrop 2
+  does. Pass rate (2026-10-29, same corpus and settings): 9,587 (97.88%), 55 more than before and none fewer;
+  208 black frames remain. See docs/compatibility.md.
+
 **Tooling**
 - `scripts/run-tests-vm.sh`: builds and tests in a disposable Tart VM (never on the host), with offscreen frames,
   window screenshots, screen recordings, a Gallery app check, corpus runs and transition captures (`--next`).

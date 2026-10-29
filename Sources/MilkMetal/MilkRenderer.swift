@@ -111,7 +111,7 @@ public final class MilkRenderer {
     private let noise: NoiseTextures
     private let pipelineCache = PipelineCache()
 
-    private let analyzer = AudioAnalyzer()
+    private var analyzer = AudioAnalyzer()
     private var active: LoadedPreset
     private var transition: Transition?
     /// The outgoing preset's mesh during a transition, before it's mixed into the frame slot's.
@@ -123,6 +123,8 @@ public final class MilkRenderer {
     private var lastTime: TimeInterval?
     private var fps = 60.0
     private var random = SplitMix(seed: 1)
+    /// Set by `reset`: the current preset restarts at the next `render` unless `load` replaces it first.
+    private var restartPending = false
 
     /// A preset with its compiled equations and shaders, and the randomness drawn for it at load.
     private struct LoadedPreset {
@@ -299,6 +301,7 @@ public final class MilkRenderer {
     /// Either way the feedback image carries over, as in MilkDrop. Loading during a transition makes the preset
     /// that was coming in the outgoing one.
     public func load(_ preset: MilkPreset, transition: TimeInterval = 0) throws {
+        restartPending = false
         let runtime = PresetRuntime(model: preset.model, seed: random.next())
         let shaders = PresetShaders(preset: preset, device: device, warpFormat: Self.feedbackFormat,
                                     compositeFormat: pixelFormat, cache: pipelineCache,
@@ -307,6 +310,41 @@ public final class MilkRenderer {
         active = loaded(preset, runtime: runtime, shaders: shaders)
         self.transition = transition > 0 && outgoing.preset != nil
             ? Transition(outgoing: outgoing, duration: transition) : nil
+    }
+
+    /// Puts the renderer back in the state a new one is in, so it can be reused and draw the frames a new renderer
+    /// would: the feedback image and blur levels are cleared to black, the frame counter, clock and fps estimate
+    /// start again, the random sequence restarts from its seed, any transition is dropped, the audio fed so far is
+    /// forgotten and the audio levels start from their defaults.
+    ///
+    /// The current preset stays loaded. If `load` comes next, the result is a new renderer that loaded that preset;
+    /// otherwise the current preset starts again from its `per_frame_init` equations at the next `render`, as if a
+    /// new renderer had loaded it. Compiled shaders and settings (`transitionPattern`, `meshSize`,
+    /// `compilesShadersInBackground`) are kept.
+    ///
+    /// Call it when nothing is feeding audio on another thread, or a few of those samples may survive the reset.
+    public func reset() {
+        transition = nil
+        outgoingMesh = []
+        frame = 0
+        lastTime = nil
+        fps = 60
+        audio.clear()
+        analyzer = AudioAnalyzer()
+        // The random draws `init` makes; `load`, or the restart at the next `render`, makes the rest.
+        random = SplitMix(seed: 1)
+        _ = loaded(nil, runtime: active.runtime, shaders: .none)
+        restartPending = true
+        if !feedback.isEmpty { clear(feedback + blur.horizontal + blur.vertical) }
+    }
+
+    /// After `reset`, restarts the current preset the way `load` would have loaded it, unless `load` came first.
+    private func restartIfPending() {
+        guard restartPending else { return }
+        restartPending = false
+        guard let preset = active.preset else { return }
+        let runtime = PresetRuntime(model: preset.model, seed: random.next())
+        active = loaded(preset, runtime: runtime, shaders: active.shaders)
     }
 
     /// Renders one frame into `texture` (e.g. a `CAMetalLayer` drawable's) at `time` seconds, encoding into
@@ -333,6 +371,7 @@ public final class MilkRenderer {
         } catch {
             return
         }
+        restartIfPending()
         inFlight.wait()
         let semaphore = inFlight
         commandBuffer.addCompletedHandler { _ in semaphore.signal() }

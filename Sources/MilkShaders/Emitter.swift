@@ -526,9 +526,16 @@ struct Emitter {
         var defaultState = "milk_fw"
         switch rest {
         case "main":
+            // Unprefixed sampler_main: in the warp shader the preset's bTexWrap picks wrap or clamp (the renderer
+            // binds it as sampler 0), as before. In the composite it is filtered and wrapping like MilkDrop 2's
+            // other unprefixed samplers: presets with bTexWrap=0 that read it outside 0…1 rely on that
+            // (Sparkle/Mass Circles/suksma - dotes hostile undertake - offx). Wrapping in the warp too fixed 4 more
+            // presets but turned 4 that drew into black frames, so the warp keeps bTexWrap.
             texture = "tex_main"
-            if state == nil { used.insert("smp_main") }
-            defaultState = "smp_main"
+            if stage == .warp {
+                if state == nil { used.insert("smp_main") }
+                defaultState = "smp_main"
+            }
         case "blur1", "blur2", "blur3":
             texture = "tex_" + rest
             defaultState = "milk_fc"
@@ -587,6 +594,9 @@ struct Emitter {
                 // Constant integer division: keep HLSL's truncation.
                 return Value(code: "(\(l.code) / \(r.code))", type: type)
             }
+            if op == "/", type.scalarKind == .float {
+                return Value(code: "milk_div(\(try convert(l, to: type)), \(try convert(r, to: type)))", type: type)
+            }
             return Value(code: "(\(try operand(l, type)) \(op) \(try operand(r, type)))", type: type)
         }
     }
@@ -616,6 +626,8 @@ struct Emitter {
             return Value(code: "(\(t.code) = \(try convert(v, to: t.type)))", type: t.type)
         case "%=" where t.type.scalarKind == .float:
             return Value(code: "(\(t.code) = fmod(\(t.code), \(try convert(v, to: t.type))))", type: t.type)
+        case "/=" where t.type.scalarKind == .float && !t.type.isMatrix:
+            return Value(code: "(\(t.code) = milk_div(\(t.code), \(try convert(v, to: t.type))))", type: t.type)
         case "*=" where t.type.isMatrix && v.type.isMatrix, "/=" where t.type.isMatrix && v.type.isMatrix:
             let f = op == "*=" ? "milk_cmul" : "milk_cdiv"
             return Value(code: "(\(t.code) = \(f)(\(t.code), \(try convert(v, to: t.type))))", type: t.type)
@@ -733,6 +745,9 @@ struct Emitter {
         "sinh": "sinh", "sqrt": "sqrt", "tan": "tan", "tanh": "tanh", "trunc": "trunc", "ddx": "dfdx", "ddy": "dfdy",
         "fwidth": "fwidth", "isnan": "isnan", "isinf": "isinf", "isfinite": "isfinite",
     ]
+    /// Functions whose Direct3D 9 instructions (`log`, `pow`) use the absolute value of the first operand. (`rsq`
+    /// does too, but see `intrinsic`: sqrt and rsqrt are left alone.)
+    static let absoluteFirstOperand: Set<String> = ["log", "log2", "log10", "pow"]
     private static let binaryMath: [String: String] = [
         "atan2": "atan2", "fmod": "fmod", "max": "max", "min": "min", "pow": "pow", "step": "step",
         "reflect": "reflect", "ldexp": "ldexp",
@@ -751,7 +766,12 @@ struct Emitter {
         func componentwise(_ mslName: String, keepInt: Bool = false) throws -> Value {
             guard var type = unify(values.map(\.type)) else { throw ShaderError.semantic("\(name): mismatched arguments", line) }
             if !keepInt || type.scalarKind == .bool { type = type.with(.float) }
-            let parts = try values.map { try convert($0, to: type) }
+            var parts = try values.map { try convert($0, to: type) }
+            // MilkDrop's shaders run as Direct3D 9 shader model 2/3, whose log and pow instructions take the
+            // absolute value of their (first) operand: pow(-2, 0.5) is 1.41, not NaN, and a NaN written to the 8-bit
+            // feedback is 0 (black). D3D9's rsq does the same, but doing it for sqrt/rsqrt here turned two presets
+            // that draw now (Fractal/Nested Circle/… soft death) black, so sqrt and rsqrt keep IEEE semantics.
+            if Self.absoluteFirstOperand.contains(name), !parts.isEmpty { parts[0] = "abs(\(parts[0]))" }
             let result = ["isnan", "isinf", "isfinite"].contains(name) ? type.with(.bool) : type
             return Value(code: "\(mslName)(\(parts.joined(separator: ", ")))", type: result)
         }
