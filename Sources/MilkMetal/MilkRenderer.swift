@@ -3,10 +3,34 @@ import Metal
 import MilkPresetFormat
 import MilkShaders
 
+/// Errors from creating a `MilkRenderer`, and from compiling a preset's shaders (those are reported through
+/// `MilkRenderer.presetErrors`, not thrown to the host).
+///
+/// The text in `description` and in the associated strings is for display only; its wording is not API.
 public enum MilkRendererError: Error, Equatable {
+    /// The pixel format, by raw value, isn't one the renderer draws into; see `MilkRenderer.supportedPixelFormats`.
     case unsupportedPixelFormat(MTLPixelFormat.RawValue)
+    /// A shader didn't compile. For the renderer's built-in shaders this is a package bug; the string is Metal's
+    /// message or the stage that failed.
     case shaderCompilation(String)
+    /// The device couldn't make a resource (a command queue, buffer, texture or sampler); the string names it.
     case resourceCreation(String)
+}
+
+extension MilkRendererError: CustomStringConvertible, LocalizedError {
+    public var description: String {
+        switch self {
+        case .unsupportedPixelFormat(let raw):
+            "Unsupported pixel format (MTLPixelFormat raw value \(raw)). Use one of bgra8Unorm, bgra8Unorm_srgb, "
+                + "rgba16Float, rgb10a2Unorm or bgr10a2Unorm."
+        case .shaderCompilation(let message):
+            "A shader didn't compile: \(message)"
+        case .resourceCreation(let resource):
+            "The Metal device couldn't create a resource: \(resource)."
+        }
+    }
+
+    public var errorDescription: String? { description }
 }
 
 /// Renders MilkDrop presets with Metal. Audio in through `feed`, frames out through `render`.
@@ -25,7 +49,9 @@ public enum MilkRendererError: Error, Equatable {
 /// settings ease across, and each preset's custom waves and shapes fade with it.
 @MainActor
 public final class MilkRenderer {
+    /// The device the renderer was created with. Textures and command buffers passed to `render` must come from it.
     public let device: MTLDevice
+    /// The format `render(to:commandBuffer:time:)` draws in. The target texture's `pixelFormat` must equal it.
     public let pixelFormat: MTLPixelFormat
     /// The current preset; during a transition, the incoming one.
     public var preset: MilkPreset? { active.preset }
@@ -149,6 +175,13 @@ public final class MilkRenderer {
         var vertical: [MTLTexture] = []
     }
 
+    /// Creates a renderer that draws into textures of `pixelFormat` on `device`, with no preset loaded (it draws
+    /// the default waveform until `load` is called).
+    ///
+    /// Compiles the built-in pipelines and allocates noise textures, so it takes a moment; create one renderer and
+    /// keep it. Throws `MilkRendererError.unsupportedPixelFormat` when `pixelFormat` isn't in
+    /// `supportedPixelFormats`, `.resourceCreation` when the device runs out of resources, and `.shaderCompilation`
+    /// if a built-in shader doesn't compile (a package bug).
     public init(device: MTLDevice, pixelFormat: MTLPixelFormat) throws {
         guard Self.supportedPixelFormats.contains(pixelFormat) else {
             throw MilkRendererError.unsupportedPixelFormat(pixelFormat.rawValue)
@@ -238,13 +271,23 @@ public final class MilkRenderer {
                             randPreset: randPreset, rotationAxes: axes)
     }
 
-    /// Formats a `CAMetalLayer` accepts, which is what hosts render into.
-    static let supportedPixelFormats: Set<MTLPixelFormat> = [
+    /// The pixel formats `init(device:pixelFormat:)` accepts: the ones a `CAMetalLayer` can show. Check this before
+    /// creating a renderer for a format you didn't choose.
+    public nonisolated static let supportedPixelFormats: Set<MTLPixelFormat> = [
         .bgra8Unorm, .bgra8Unorm_srgb, .rgba16Float, .rgb10a2Unorm, .bgr10a2Unorm,
     ]
 
-    /// Called from any thread; copies into an internal ring. Interleaved Float32 at `sampleRate`
-    /// (stereo expected; mono is duplicated).
+    /// Hands the renderer audio. Interleaved Float32 at `sampleRate`; stereo is expected, one channel is duplicated
+    /// to both sides, and channels past two are ignored.
+    ///
+    /// Nonisolated: call it from any thread (typically the audio tap's), but **from one thread at a time**. The ring
+    /// behind it is single-producer, so two threads feeding at once (two taps, or a tap plus a main-thread synth)
+    /// race. It copies into a 4,096-frame ring without allocating, locking or blocking, so it is safe on a real-time
+    /// audio thread. The analyzer reads the newest 1,024 frames at each `render`.
+    ///
+    /// Feed audio in small chunks as it plays. The renderer doesn't pace what it's given: a large tap buffer (an
+    /// `AVAudioEngine` tap often delivers about 100 ms at once) is seen as the same window for several frames, so
+    /// the visuals step. Split such buffers and feed them over time, as the MilkDrop Gallery's `AudioPlayer` does.
     public nonisolated func feed(samples: UnsafeBufferPointer<Float>, channels: Int, sampleRate: Double) {
         audio.write(samples: samples, channels: channels, sampleRate: sampleRate)
     }
@@ -266,8 +309,23 @@ public final class MilkRenderer {
             ? Transition(outgoing: outgoing, duration: transition) : nil
     }
 
-    /// Renders one frame into `texture` (e.g. a `CAMetalLayer` drawable's) at `time` seconds.
+    /// Renders one frame into `texture` (e.g. a `CAMetalLayer` drawable's) at `time` seconds, encoding into
+    /// `commandBuffer`. `MilkView` calls this for you; call it yourself to draw into your own layer or offscreen.
+    ///
+    /// The contract:
+    /// - `texture.pixelFormat` must equal `pixelFormat`, and the texture needs `.renderTarget` usage. A mismatched
+    ///   format fails Metal's pipeline validation (debug builds also assert).
+    /// - **Commit every command buffer you pass.** The renderer keeps up to three frames in flight, waiting on a
+    ///   semaphore that is signalled only when a buffer completes. A buffer that's never committed never completes,
+    ///   so the fourth call after it blocks the main thread forever. The wait also means `render` blocks the main
+    ///   actor whenever the GPU is three frames behind.
+    /// - `time` is the preset's `time` and drives its `fps` and transition progress, so it should rise steadily
+    ///   (e.g. seconds since you started drawing). Each `MilkView` starts its own clock at 0.
+    /// - If the renderer can't allocate its textures or buffers for this size (or the texture is 0×0), it returns
+    ///   without encoding anything; the command buffer is left untouched and the frame is skipped.
     public func render(to texture: MTLTexture, commandBuffer: MTLCommandBuffer, time: TimeInterval) {
+        assert(texture.pixelFormat == pixelFormat,
+               "MilkRenderer.render: texture pixelFormat \(texture.pixelFormat.rawValue) != renderer's \(pixelFormat.rawValue)")
         let width = texture.width, height = texture.height
         guard width > 0, height > 0 else { return }
         do {

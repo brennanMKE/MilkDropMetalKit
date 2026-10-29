@@ -40,6 +40,7 @@ Depend on a tagged version once 1.0 ships.
 ## Usage
 
 ```swift
+import Metal
 import MilkMetal
 
 let device = MTLCreateSystemDefaultDevice()!
@@ -52,12 +53,16 @@ try renderer.load(MilkPreset(contentsOf: nextURL), transition: 2.7)
 // A ready-made view: CAMetalLayer plus a display link. The host owns windows, menus and preset browsing.
 let view = try MilkView(renderer: renderer)
 
-// From an audio tap, on any thread. Interleaved Float32; it never allocates or locks.
+// From an audio tap, on any thread but one thread at a time. Interleaved Float32; it never allocates or locks.
+// Feed small chunks as the audio plays: a large tap buffer is seen as one window for several frames.
 renderer.feed(samples: buffer, channels: 2, sampleRate: 48_000)
 ```
 
-`MilkRenderer` is `@MainActor`. Only `feed` is nonisolated. To draw into your own Metal layer, call
-`render(to:commandBuffer:time:)` with the drawable's texture.
+`MilkRenderer` is `@MainActor`. Only `feed` is nonisolated, and it's single-producer: call it from one thread at a
+time. To draw into your own Metal layer, call `render(to:commandBuffer:time:)` with the drawable's texture. The
+texture's pixel format must equal the renderer's `pixelFormat`, and you must commit every command buffer you pass:
+the renderer keeps up to three frames in flight and waits for one to complete, so an uncommitted buffer stalls the
+main thread a few frames later.
 
 ## Modules
 
