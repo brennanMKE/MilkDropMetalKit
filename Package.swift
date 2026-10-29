@@ -27,8 +27,9 @@ let package = Package(
         .testTarget(name: "MilkMetalTests", dependencies: ["MilkMetal", "MilkShaders"]),
         // Host tool: .milk → preset bundle (equations checked, HLSL → MSL ahead of time). Never shipped in an app.
         .executableTarget(name: "milkconvert", dependencies: ["MilkPresetFormat", "MilkEEL", "MilkShaders"]),
-        // Shared by the demos: SynthAudio, a generated test signal.
+        // Shared by the demos: SynthAudio, a generated test signal, and the compatibility run's frame checks and report.
         .target(name: "MilkDemoSupport"),
+        .testTarget(name: "MilkDemoSupportTests", dependencies: ["MilkDemoSupport"]),
         // Demo and capture tool: MilkView in a window, or offscreen frames, fed by a generated signal. Plays nothing.
         .executableTarget(name: "milkview-demo", dependencies: ["MilkMetal", "MilkDemoSupport"]),
         // MilkDrop Gallery: a SwiftUI app that steps through Presets/gallery.json and reacts to an audio file it plays.

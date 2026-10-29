@@ -18,6 +18,11 @@ import UniformTypeIdentifiers
 // Both window and frames take [--next P2 [--switch-at T] [--transition S] [--pattern NAME]]: at T seconds
 // (default 2) load P2 with an S second transition (default 2.7) in pattern NAME (random, crossfade, wipe, plasma,
 // radial; default random).
+//
+//   milkview-demo compat --dir DIR --report FILE.jsonl [--frames N] [--every K] [--size WxH] [--timeout S]
+//                        [--budget-ms MS] [--cpu-budget-ms MS] [--stride N] [--limit N]
+//       renders every .milk under DIR offscreen and appends one JSON line per preset to FILE; see
+//       docs/compatibility.md. Resumes from FILE; exits 0 once every preset has a record.
 
 func fail(_ message: String) -> Never {
     FileHandle.standardError.write(Data(("milkview-demo: " + message + "\n").utf8))
@@ -39,6 +44,13 @@ struct Options {
     var switchAt = 2.0
     var transition = 2.7
     var pattern = MilkTransitionPattern.random
+    var dir: URL?
+    var report: URL?
+    var timeout = 60.0
+    var gpuBudgetMs = 8.0
+    var cpuBudgetMs = 2.0
+    var stride = 1
+    var limit: Int?
 
     init(_ arguments: [String]) {
         var args = arguments[...]
@@ -52,15 +64,23 @@ struct Options {
             guard parts.count == 2 else { fail("\(flag) needs A\(separator)B") }
             return (parts[0], parts[1])
         }
+        var sized = false, counted = false, everied = false
         while let flag = args.popFirst() {
             switch flag {
             case "--preset": preset = URL(fileURLWithPath: value(flag))
             case "--seconds": seconds = Double(value(flag)) ?? seconds
-            case "--size": let (w, h) = pair(flag, "x"); width = Int(w); height = Int(h)
+            case "--size": let (w, h) = pair(flag, "x"); width = Int(w); height = Int(h); sized = true
             case "--origin": (originX, originY) = pair(flag, ",")
             case "--out": out = URL(fileURLWithPath: value(flag))
-            case "--count": count = Int(value(flag)) ?? count
-            case "--every": every = max(1, Int(value(flag)) ?? every)
+            case "--count", "--frames": count = max(1, Int(value(flag)) ?? count); counted = true
+            case "--every": every = max(1, Int(value(flag)) ?? every); everied = true
+            case "--dir": dir = URL(fileURLWithPath: value(flag))
+            case "--report": report = URL(fileURLWithPath: value(flag))
+            case "--timeout": timeout = Double(value(flag)) ?? timeout
+            case "--budget-ms": gpuBudgetMs = Double(value(flag)) ?? gpuBudgetMs
+            case "--cpu-budget-ms": cpuBudgetMs = Double(value(flag)) ?? cpuBudgetMs
+            case "--stride": stride = max(1, Int(value(flag)) ?? stride)
+            case "--limit": limit = Int(value(flag))
             case "--next": next = URL(fileURLWithPath: value(flag))
             case "--switch-at": switchAt = Double(value(flag)) ?? switchAt
             case "--transition": transition = Double(value(flag)) ?? transition
@@ -72,6 +92,12 @@ struct Options {
                 pattern = p
             default: fail("unknown option \(flag)")
             }
+        }
+        // compat renders many presets, so its defaults are smaller.
+        if mode == "compat" {
+            if !sized { (width, height) = (640, 360) }
+            if !counted { count = 120 }
+            if !everied { every = 30 }
         }
     }
 }
@@ -225,6 +251,8 @@ MainActor.assumeIsolated {
         print("max threads per group \(device.maxThreadsPerThreadgroup.width)")
     case "frames":
         renderFrames()
+    case "compat":
+        runCompat(options)
     case "window":
         let app = NSApplication.shared
         let delegate = DemoApp()
@@ -232,6 +260,6 @@ MainActor.assumeIsolated {
         app.setActivationPolicy(.regular)
         app.run()
     default:
-        fail("usage: milkview-demo window|frames [options]")
+        fail("usage: milkview-demo info|window|frames|compat [options]")
     }
 }

@@ -57,7 +57,7 @@ API. Requires macOS 14 and Swift 6. No third-party dependencies, no network acce
 - A corpus runner that loads every preset in a folder, renders frames offscreen and flags crashes, timeouts, load
   failures, GPU errors, NaN or infinite pixels, black frames, and frames over the CPU or GPU budget. It writes a
   resumable per-preset report and a pass-rate summary, and runs in the test VM.
-- Pass rate at release: _TBD: pack, preset count, pass rate, median/p99 frame time (fill in from the VM run)._
+- Pass rate (2026-10-29, Cream of the Crop, all 9,795 presets, 300 frames at 640x360 in the VM): 9,532 passed (97.31%); every failure is a black frame (263); no crashes, timeouts, load failures or NaNs. Median preset 0.81 ms GPU, 0.48 ms CPU per frame (VM timing). See docs/compatibility.md.
 
 **Tooling**
 - `scripts/run-tests-vm.sh`: builds and tests in a disposable Tart VM (never on the host), with offscreen frames,

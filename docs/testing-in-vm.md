@@ -52,6 +52,7 @@ scripts/run-tests-vm.sh --preset Presets/spike-tunnel.milk --frames --screens --
 scripts/run-tests-vm.sh --preset Presets --frames --every 100   # 3 frames of every preset in the folder
 scripts/run-tests-vm.sh --app               # build the MilkDrop Gallery .app and screenshot it
 scripts/run-tests-vm.sh --corpus ~/sample --frames --every 100   # render presets from any host folder
+scripts/run-tests-vm.sh --compat Corpus/presets-cream-of-the-crop --compat-stride 50   # sampled compatibility run
 ```
 
 `--preset` picks the preset for the capture steps (default: the renderer's built-in defaults). A folder renders
@@ -64,6 +65,15 @@ frames and fitting sizes, which is how a layout that overflowed the window was f
 each with `--frames`; without `--preset`, the window steps use its first preset. Translating and compiling a whole
 pack's shaders doesn't need the VM (it draws nothing): `swift run milkconvert shaders --compile Corpus/…`.
 
+`--compat DIR` is the compatibility run ([compatibility.md](compatibility.md)): it copies every `.milk` under DIR,
+keeping the folders, renders each offscreen with `milkview-demo compat` and brings back `report.jsonl` (one line
+per preset) and `summary.json`; the summary's lines go into `summary.txt`. `--compat-stride N` takes every Nth
+preset, `--compat-limit N` at most N, `--compat-frames N` and `--compat-timeout S` set the frames per preset and the
+time limit per preset, and `--compat-hours H` (default 10) stops the step and brings back a partial report. The loop
+runs detached in the guest and the host polls it every 20 s, printing a progress line every 5 minutes, so a long
+run never rides on one `tart exec`. Failing presets don't fail the step; it fails only if the tool couldn't finish
+(the loop died, hit its 1000-restart cap or the hour limit).
+
 Results come back to `build/vm-tests/<run-id>/` (gitignored), and the last line printed is the path of `summary.txt`:
 
 ```
@@ -74,6 +84,7 @@ build/vm-tests/<run-id>/
 ├── screens/             <preset>-window.png (the window alone) and <preset>-display.png (the whole screen) (--screens);
 │                        gallery-<preset>.png (--app)
 ├── recordings/          screen recordings, <preset>.mov (--record)
+├── report.jsonl         one JSON line per preset (--compat); summary.json, the totals; compat.log, its progress
 └── metal-device.txt     the guest's Metal device and GPU families (milkview-demo info)
 ```
 
@@ -86,7 +97,7 @@ Run it in the foreground of a terminal. A dropped session costs a clone, not a w
    20 GiB free on `/` (disk usually runs out before memory); memory checked, with a memory-signal request if short.
 2. **Sweep stale clones.** A SIGKILL skips the `EXIT` trap and leaves a clone behind. Delete only names shaped
    exactly `milkdrop-test-<YYYYMMDD>-<HHMMSS>-<pid>` whose `<pid>` is not a live `run-tests-vm.sh`, or whose run id
-   is over 8 h old. **Never match on a prefix.** A prefix sweep once deleted a golden image.
+   is over 12 h old (long enough for a full `--compat` run). **Never match on a prefix.** A prefix sweep once deleted a golden image.
 3. **Export a snapshot** into a fresh `mktemp -d`. By default it's the working tree, tracked files plus untracked
    files that aren't ignored, so a change can be checked before it's committed:
    `git ls-files -z -co --exclude-standard | … | rsync -a --from0 --files-from=- "$REPO/" "$EXPORT/src/"`.
@@ -109,7 +120,7 @@ Run it in the foreground of a terminal. A dropped session costs a clone, not a w
    `set -o pipefail` **inside the guest's shell**: without it the step's status is `tee`'s, which is always 0
    (Changeover reported false passes that way until 2026-10-04). Build first
    (`swift build --build-tests`); if that fails, mark the remaining steps `SKIP`. Then `swift test --skip-build`, then
-   the capture steps below.
+   the capture steps below, then `--compat`.
 8. **Pull results** by streaming a tarball out. The export share is read-only on purpose, so nothing comes back
    through it:
    ```bash

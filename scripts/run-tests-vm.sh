@@ -6,7 +6,7 @@
 # output muted, runs the steps, pulls the results back to build/vm-tests/<run-id>/, and deletes the clone.
 #
 # Usage: scripts/run-tests-vm.sh [--head] [--frames] [--screens] [--record SECONDS] [--app] [--preset PATH]
-#                                [--count N] [--every K] [--size WxH]
+#                                [--count N] [--every K] [--size WxH] [--compat DIR [--compat-stride N] ...]
 #   --head          test the last commit (git archive HEAD) instead of the working tree
 #   --frames        render the preset offscreen with milkview-demo: every Kth of N frames → frames/<preset>/NNNN.png
 #   --screens       open milkview-demo's window and take screenshots of it → screens/
@@ -18,12 +18,18 @@
 #                   copied into the run's snapshot, never committed
 #   --count N, --every K, --size WxH   frames options (default 300, 30, 1280x720)
 #   --next PATH     after 2 s of each capture, blend into this preset (relative to the repo) over 2.7 s
+#   --compat DIR    compatibility run over every .milk under DIR (any host path): milkview-demo compat in a restart
+#                   loop → report.jsonl, summary.json; see docs/compatibility.md. The failure rate never fails the
+#                   run, only the tool not finishing does
+#   --compat-stride N, --compat-limit N, --compat-frames N, --compat-timeout S   every Nth preset, at most N
+#                   presets, frames per preset (default 120), seconds per preset before a timeout (default 60)
+#   --compat-hours H   stop the compat step after H hours (default 10) and bring back the partial report
 #
 # In the guest, in order:
 #   build      swift build --build-tests, and a release build of milkview-demo (a failure skips everything below)
 #   tests      swift test --skip-build
 #   metal      the guest's GPU and Metal support (system_profiler) → metal-device.txt
-#   frames, screens, record, app   only when asked
+#   frames, screens, record, app, compat   only when asked
 # Exit codes: 0 pass, 1 a step failed (or the host's coreaudiod started IO during the run), 2 bad arguments,
 #             3 infrastructure (the guest never came up or was lost): not a code problem, rerun.
 
@@ -38,6 +44,7 @@ CORPUS=""
 PRESET=""
 NEXT=""
 COUNT=300 EVERY=30 FRAME_SIZE=1280x720
+COMPAT="" COMPAT_STRIDE=1 COMPAT_LIMIT="" COMPAT_FRAMES=120 COMPAT_TIMEOUT=60 COMPAT_HOURS=10
 args=("$@")
 while (( $#args )); do
   arg=$args[1]; shift args
@@ -53,6 +60,12 @@ while (( $#args )); do
     --size) FRAME_SIZE=${args[1]:-}; shift args 2>/dev/null; [[ "$FRAME_SIZE" == <1-8192>x<1-8192> ]] || { print -r -- "--size needs WxH" >&2; exit 2 } ;;
     --preset) PRESET=${args[1]:-}; shift args 2>/dev/null; [[ -n "$PRESET" ]] || { print -r -- "--preset needs a path" >&2; exit 2 } ;;
     --next) NEXT=${args[1]:-}; shift args 2>/dev/null; [[ -n "$NEXT" ]] || { print -r -- "--next needs a path" >&2; exit 2 } ;;
+    --compat) COMPAT=${args[1]:-}; shift args 2>/dev/null; [[ -d "$COMPAT" ]] || { print -r -- "--compat needs a directory" >&2; exit 2 }; COMPAT=${COMPAT:A} ;;
+    --compat-stride) COMPAT_STRIDE=${args[1]:-}; shift args 2>/dev/null; [[ "$COMPAT_STRIDE" == <1-100000> ]] || { print -r -- "--compat-stride needs a number" >&2; exit 2 } ;;
+    --compat-limit) COMPAT_LIMIT=${args[1]:-}; shift args 2>/dev/null; [[ "$COMPAT_LIMIT" == <1-1000000> ]] || { print -r -- "--compat-limit needs a number" >&2; exit 2 } ;;
+    --compat-frames) COMPAT_FRAMES=${args[1]:-}; shift args 2>/dev/null; [[ "$COMPAT_FRAMES" == <1-100000> ]] || { print -r -- "--compat-frames needs a number" >&2; exit 2 } ;;
+    --compat-timeout) COMPAT_TIMEOUT=${args[1]:-}; shift args 2>/dev/null; [[ "$COMPAT_TIMEOUT" == <1-3600> ]] || { print -r -- "--compat-timeout needs 1-3600 seconds" >&2; exit 2 } ;;
+    --compat-hours) COMPAT_HOURS=${args[1]:-}; shift args 2>/dev/null; [[ "$COMPAT_HOURS" == <1-48> ]] || { print -r -- "--compat-hours needs 1-48" >&2; exit 2 } ;;
     -h|--help) awk 'NR > 1 { if (!/^#/) exit; print }' "$0"; exit 0 ;;
     *) print -r -- "unknown option: $arg" >&2; exit 2 ;;
   esac
@@ -146,7 +159,8 @@ fi
 
 # A SIGKILL or OOM kill skips the trap, so sweep clones whose run is gone. Only names shaped exactly like this
 # script's run ids are touched (a prefix match once deleted a golden image); a live run's clone is left alone.
-MAX_RUN_HOURS=4
+# Long enough for a full --compat run.
+MAX_RUN_HOURS=12
 run_is_live() { local cmd; cmd=$(ps -p "$1" -o command= 2>/dev/null) || return 1; [[ "$cmd" == *run-tests-vm.sh* ]]; }
 for old in $(tart list --quiet); do
   [[ "$old" =~ '^milkdrop-test-([0-9]{8})-([0-9]{6})-([0-9]+)$' ]] || continue
@@ -189,6 +203,30 @@ if [[ -n "$CORPUS" ]]; then
   fi
 fi
 
+if [[ -n "$COMPAT" ]]; then
+  # The tree is kept (pack folders can reuse names); only .milk files are copied.
+  mkdir -p "$EXPORT/compat"
+  rsync -a --include='*/' --include='*.milk' --exclude='.*' --exclude='*' --prune-empty-dirs "$COMPAT/" "$EXPORT/compat/"
+  log "Compat: $(find "$EXPORT/compat" -name '*.milk' | wc -l | tr -d ' ') presets from $COMPAT, stride $COMPAT_STRIDE${COMPAT_LIMIT:+, limit $COMPAT_LIMIT}"
+  # The restart loop, run detached in the guest so a long run doesn't hang on one tart exec. A crash or timeout
+  # exits nonzero and the tool resumes from the report; it exits 0 once every preset has a record.
+  cat >"$EXPORT/compat-loop.sh" <<LOOP
+#!/bin/zsh
+st=0 restarts=0
+while :; do
+  COMPAT_LAST_STATUS=\$st $GUEST_SRC/.build/release/milkview-demo compat --dir /Users/admin/compat \\
+    --report $GUEST_RESULTS/report.jsonl --frames $COMPAT_FRAMES --timeout $COMPAT_TIMEOUT \\
+    --stride $COMPAT_STRIDE ${COMPAT_LIMIT:+--limit $COMPAT_LIMIT}
+  st=\$?
+  (( st == 0 )) && break
+  (( ++restarts > 1000 )) && { echo "compat gave up after 1000 restarts"; break; }
+  echo "compat exited \$st; restarting (\$restarts)"
+done
+echo "compat restarts \$restarts"
+echo \$st > $GUEST_RESULTS/compat.rc
+LOOP
+fi
+
 # --- Clone and boot --------------------------------------------------------
 
 if command -v tart-lease >/dev/null; then
@@ -216,6 +254,9 @@ gx_prep() { gx "$1" && return 0; guest_alive && fail "Guest prepare step failed:
 gx_prep "rm -rf $GUEST_SRC $GUEST_RESULTS && mkdir -p $GUEST_RESULTS && cp -R '/Volumes/My Shared Files/run/src' $GUEST_SRC"
 # --no-audio only cuts the guest's path to the host; mute the guest's own output as well.
 gx_prep "osascript -e 'set volume output volume 0' -e 'set volume with output muted' >/dev/null 2>&1 || true"
+if [[ -n "$COMPAT" ]]; then
+  gx_prep "rm -rf /Users/admin/compat && cp -R '/Volumes/My Shared Files/run/compat' /Users/admin/compat"
+fi
 if (( CAPTURE )); then
   # macOS 15+ asks whether tart-guest-agent may "bypass the system private window picker" on the first capture, and
   # the dialog lands in region recordings. Pre-approve it in this clone only (never in the golden image).
@@ -309,6 +350,40 @@ if (( APP )); then
     ls -l $GUEST_RESULTS/screens"
 fi
 
+if [[ -n "$COMPAT" ]]; then
+  # Started detached, then polled with short execs; progress lines go to compat.log.
+  step_order+=(compat)
+  if (( build_failed )); then
+    step_rc[compat]=skip
+  else
+    log "Guest: compat (stopping after $COMPAT_HOURS h)"
+    gx "cp '/Volumes/My Shared Files/run/compat-loop.sh' /tmp/compat-loop.sh
+      nohup /bin/zsh /tmp/compat-loop.sh >$GUEST_RESULTS/compat.log 2>&1 </dev/null &!
+      echo \$! >/tmp/compat.pid" || infra_fail "could not start compat"
+    compat_deadline=$(( SECONDS + COMPAT_HOURS * 3600 )) last_report=0
+    step_rc[compat]=1
+    while :; do
+      sleep 20
+      if rc=$(gx "cat $GUEST_RESULTS/compat.rc 2>/dev/null"); [[ -n "$rc" ]]; then
+        step_rc[compat]=$rc; break
+      fi
+      if ! gx "kill -0 \$(cat /tmp/compat.pid)" >/dev/null 2>&1; then
+        guest_alive || infra_fail "guest lost during compat"
+        log "compat loop is gone without a result"; break
+      fi
+      if (( SECONDS > compat_deadline )); then
+        log "compat stopped at the $COMPAT_HOURS h limit; the report is partial"
+        gx "pkill -f compat-loop.sh; pkill -f 'milkview-demo compat'" || true
+        break
+      fi
+      if (( SECONDS - last_report >= 300 )); then
+        last_report=$SECONDS
+        print -r -- "    $(gx "grep -c . $GUEST_RESULTS/report.jsonl 2>/dev/null; grep '^\[' $GUEST_RESULTS/compat.log | tail -1" | tr '\n' ' ')"
+      fi
+    done
+  fi
+fi
+
 # --- Results back ----------------------------------------------------------
 
 summary_start
@@ -324,7 +399,9 @@ for name in $step_order; do
 done
 for name in $step_order; do
   [[ -f "$RESULTS_DIR/$name.log" ]] || continue
-  if [[ ${step_rc[$name]} == 0 ]]; then
+  if [[ $name == compat ]]; then
+    lines=$( { grep -E '^compat [0-9]+ presets, [0-9]+ already|restarting|gave up|^timeout |^crash ' "$RESULTS_DIR/$name.log" | head -12; awk '/^compat finished/ { f = 1 } f' "$RESULTS_DIR/$name.log"; } || true)
+  elif [[ ${step_rc[$name]} == 0 ]]; then
     lines=$(grep -E 'Build complete|Test run with|^frames |^device |^window |\.(png|mov)$|Chipset Model|Metal' "$RESULTS_DIR/$name.log" | tail -6 || true)
   else
     lines=$(grep -E 'error:|✘|FAIL|failed|never|no recording|still running' "$RESULTS_DIR/$name.log" | head -20 || true)

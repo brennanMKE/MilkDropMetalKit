@@ -73,7 +73,7 @@ main thread a few frames later.
 | `MilkEEL` | ns-eel2 expression language → slot-resolved closure tree | Working: full function set, `megabuf`, loops |
 | `MilkShaders` (internal) | MilkDrop 2 HLSL → Metal translator and the shader prelude | Working ([docs/shaders.md](docs/shaders.md)) |
 | `milkconvert` | Host CLI: check presets, translate shaders, write `.milkpreset` bundles | Working: `inspect`, `shaders`, `convert` |
-| `milkview-demo` | `MilkView` in a window, or offscreen frames, fed by a generated signal | Working |
+| `milkview-demo` | `MilkView` in a window, offscreen frames, or a corpus compatibility run, fed by a generated signal | Working ([docs/compatibility.md](docs/compatibility.md): 97.3% of 9,795 presets pass) |
 | `MilkDropGallery` | SwiftUI gallery app: presets by feature, plays an audio file | Working |
 
 ## MilkDrop Gallery
@@ -101,6 +101,7 @@ swift build
 scripts/run-tests-vm.sh                          # tests in a Tart VM
 scripts/run-tests-vm.sh --record 15 --preset Presets/spike-tunnel.milk   # plus a 15 s screen recording
 scripts/run-tests-vm.sh --frames --every 10 --preset Presets/echo.milk --next Presets/shader-glow.milk   # a transition
+scripts/run-tests-vm.sh --compat Corpus/presets-cream-of-the-crop --compat-stride 50   # sampled compatibility run
 swift run milkconvert inspect path/to/presets/   # parse every .milk file and report failures
 swift run milkconvert shaders --compile path/to/presets/   # translate and compile every MilkDrop 2 shader
 swift run milkconvert convert --out Converted/ path/to/presets/   # write .milkpreset bundles
