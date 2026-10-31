@@ -57,6 +57,8 @@ OpenGL architecture maps less directly to Metal than Butterchurn's staged design
 
 ## 4. Package shape
 
+> The shipped 1.0 API differs from this pre-build sketch: see the [README](../README.md) and [api-1.0.md](api-1.0.md).
+
 Swift 6 package, `platforms: [.macOS(.v14)]` (Roadie's floor; add iOS later if wanted), strict concurrency on.
 
 ```

@@ -6,17 +6,17 @@
 
 /// The variables of one evaluation context (a preset's equations, a wave's per-point code, …). Names resolve to
 /// slots at compile time. `values` holds each slot's initial value; `EELMemory` is the run-time storage.
-public struct EELVariableTable: Sendable {
-    public private(set) var names: [String] = []
-    public var values: [Double] = []
+package struct EELVariableTable: Sendable {
+    package private(set) var names: [String] = []
+    package var values: [Double] = []
     private var slots: [String: Int] = [:]
 
-    public init() {}
+    package init() {}
 
-    public var count: Int { names.count }
+    package var count: Int { names.count }
 
     /// The slot for `name` (case-insensitive, as in ns-eel2), created as 0 on first use.
-    public mutating func slot(for name: String) -> Int {
+    package mutating func slot(for name: String) -> Int {
         let key = name.lowercased()
         if let slot = slots[key] { return slot }
         let slot = names.count
@@ -27,11 +27,11 @@ public struct EELVariableTable: Sendable {
     }
 
     /// The slot for `name` if anything has used it.
-    public func existingSlot(for name: String) -> Int? {
+    package func existingSlot(for name: String) -> Int? {
         slots[name.lowercased()]
     }
 
-    public subscript(name: String) -> Double {
+    package subscript(name: String) -> Double {
         get { slots[name.lowercased()].map { values[$0] } ?? 0 }
         set { values[slot(for: name)] = newValue }
     }
@@ -39,12 +39,12 @@ public struct EELVariableTable: Sendable {
 
 /// State every context of one preset shares: `gmegabuf` and the global registers `reg00`–`reg99`.
 /// Not thread-safe, like `EELMemory`.
-public final class EELShared: @unchecked Sendable {
-    public static let registerCount = 100
+package final class EELShared: @unchecked Sendable {
+    package static let registerCount = 100
     var gmegabuf = EELBuffer()
-    public let registers: UnsafeMutablePointer<Double>
+    package let registers: UnsafeMutablePointer<Double>
 
-    public init() {
+    package init() {
         registers = .allocate(capacity: Self.registerCount)
         registers.initialize(repeating: 0, count: Self.registerCount)
     }
@@ -64,17 +64,17 @@ public final class EELShared: @unchecked Sendable {
 
 /// Run-time storage for the slots of one `EELVariableTable`, plus the `rand` state and `megabuf`.
 /// Not thread-safe: one memory is used by one thread at a time.
-public final class EELMemory: @unchecked Sendable {
-    public let count: Int
-    public let values: UnsafeMutablePointer<Double>
+package final class EELMemory: @unchecked Sendable {
+    package let count: Int
+    package let values: UnsafeMutablePointer<Double>
     /// SplitMix64 state for `rand`.
-    public var randomState: UInt64
+    package var randomState: UInt64
     /// `megabuf`, allocated in blocks on first write.
     var megabuf = EELBuffer()
     /// `gmegabuf` and the registers, shared with the preset's other contexts.
-    public let shared: EELShared
+    package let shared: EELShared
 
-    public init(table: EELVariableTable, seed: UInt64 = 1, shared: EELShared = EELShared()) {
+    package init(table: EELVariableTable, seed: UInt64 = 1, shared: EELShared = EELShared()) {
         count = table.count
         values = .allocate(capacity: max(count, 1))
         values.initialize(repeating: 0, count: max(count, 1))
@@ -88,13 +88,13 @@ public final class EELMemory: @unchecked Sendable {
         megabuf.free()
     }
 
-    public subscript(slot: Int) -> Double {
+    package subscript(slot: Int) -> Double {
         get { values[slot] }
         set { values[slot] = newValue }
     }
 
     /// Copies every slot from `other`, which must come from the same table.
-    public func copyValues(from other: EELMemory) {
+    package func copyValues(from other: EELMemory) {
         precondition(other.count == count)
         values.update(from: other.values, count: count)
     }
@@ -146,13 +146,13 @@ struct EELBuffer {
     }
 }
 
-public enum EELCompileError: Error, Equatable, CustomStringConvertible {
+package enum EELCompileError: Error, Equatable, CustomStringConvertible {
     case syntax(message: String, offset: Int)
     case unknownFunction(String)
     case wrongArgumentCount(function: String, expected: Int, got: Int)
     case notAssignable(offset: Int)
 
-    public var description: String {
+    package var description: String {
         switch self {
         case .syntax(let message, let offset): "syntax error at \(offset): \(message)"
         case .unknownFunction(let name): "unknown function \(name)"
@@ -163,12 +163,12 @@ public enum EELCompileError: Error, Equatable, CustomStringConvertible {
 }
 
 /// A compiled block of `;`-separated statements.
-public struct EELProgram: Sendable {
-    public let source: String
+package struct EELProgram: Sendable {
+    package let source: String
     let node: Compiler.Node?
 
     /// Compiles `source`, adding any variables it uses to `table`.
-    public init(source: String, table: inout EELVariableTable) throws {
+    package init(source: String, table: inout EELVariableTable) throws {
         self.source = source
         var parser = try Parser(source: source)
         guard let ast = try parser.parseProgram() else {
@@ -178,34 +178,34 @@ public struct EELProgram: Sendable {
         node = try Compiler.compile(ast, table: &table)
     }
 
-    public var isEmpty: Bool { node == nil }
+    package var isEmpty: Bool { node == nil }
 
     /// Runs the program against `memory`, which must have been made from the table it was compiled with (or a
     /// table that grew from it), and returns the value of the last statement.
     @discardableResult
-    public func run(_ memory: EELMemory) -> Double {
+    package func run(_ memory: EELMemory) -> Double {
         node?(memory) ?? 0
     }
 }
 
 /// Arithmetic rules presets depend on. Collect new ones here, each with a test, as they are found.
-public enum EELQuirks {
+package enum EELQuirks {
     /// `equal`, `==`, `bnot` and truth tests use this tolerance.
-    public static let closeFactor = 0.00001
+    package static let closeFactor = 0.00001
 
     /// `x / 0` is 0, not ±inf or NaN.
-    @inlinable public static func divide(_ a: Double, _ b: Double) -> Double { b == 0 ? 0 : a / b }
+    @inlinable package static func divide(_ a: Double, _ b: Double) -> Double { b == 0 ? 0 : a / b }
 
-    @inlinable public static func isTrue(_ x: Double) -> Bool { abs(x) >= closeFactor }
+    @inlinable package static func isTrue(_ x: Double) -> Bool { abs(x) >= closeFactor }
 
     /// Truncates toward zero; non-finite values become 0 rather than trapping.
-    @inlinable public static func toInt(_ x: Double) -> Int64 {
+    @inlinable package static func toInt(_ x: Double) -> Int64 {
         guard x.isFinite else { return 0 }
         return Int64(max(min(x, 9.0e18), -9.0e18))
     }
 
     /// Integer modulo; `x % 0` is 0.
-    @inlinable public static func modulo(_ a: Double, _ b: Double) -> Double {
+    @inlinable package static func modulo(_ a: Double, _ b: Double) -> Double {
         let bi = toInt(b)
         return bi == 0 ? 0 : Double(toInt(a) % bi)
     }

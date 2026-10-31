@@ -17,7 +17,7 @@ set -euo pipefail
 APP_NAME="MilkDrop Gallery"
 EXECUTABLE="MilkDropGallery"
 BUNDLE_ID="co.sstools.MilkDropGallery"
-VERSION="0.1.0"
+VERSION="1.0.0"
 # Build number: UTC date and time, so every build is newer than the last.
 BUILD_NUMBER=$(date -u +%Y%m%d%H%M)
 

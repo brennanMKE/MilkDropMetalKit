@@ -1,4 +1,4 @@
-import CMilkAtomics
+internal import CMilkAtomics
 
 /// Single-producer, single-consumer stereo sample ring between the host's audio thread and the renderer.
 ///

@@ -1,6 +1,6 @@
 import Foundation
-import MilkEEL
-import MilkPresetFormat
+internal import MilkEEL
+internal import MilkPresetFormat
 
 /// A variable a preset's equations see with a value from the `.milk` file: its name in equations, the file keys
 /// that set it (first match wins), and MilkDrop's default for files that don't.

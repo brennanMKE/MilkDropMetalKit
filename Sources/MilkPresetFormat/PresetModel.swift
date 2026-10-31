@@ -4,38 +4,38 @@ import Foundation
 ///
 /// Keys are stored lowercased (MilkDrop reads them case-insensitively). Equation and shader bodies keep their
 /// line order and are joined with newlines; nothing here evaluates or validates them.
-public struct PresetModel: Sendable, Equatable {
+package struct PresetModel: Sendable, Equatable {
     /// `MILKDROP_PRESET_VERSION` (100 for MilkDrop 1 files that omit it, 200/201 for MilkDrop 2).
-    public var version: Int
+    package var version: Int
     /// Pixel shader model of the warp shader (`PSVERSION_WARP`, else `PSVERSION`); 0 means none.
-    public var warpShaderVersion: Int
+    package var warpShaderVersion: Int
     /// Pixel shader model of the composite shader (`PSVERSION_COMP`, else `PSVERSION`); 0 means none.
-    public var compositeShaderVersion: Int
+    package var compositeShaderVersion: Int
 
     /// Numeric `key=value` settings such as `zoom`, `fdecay`, `nwavemode`, `wave_r`.
-    public var values: [String: Double]
+    package var values: [String: Double]
     /// Non-numeric settings, kept so nothing in the file is silently lost.
-    public var strings: [String: String]
+    package var strings: [String: String]
 
-    public var perFrameInit: String
-    public var perFrame: String
+    package var perFrameInit: String
+    package var perFrame: String
     /// Per-vertex equations (`per_pixel_N` in the file; they run per mesh vertex, not per screen pixel).
-    public var perPixel: String
+    package var perPixel: String
 
     /// Always `PresetModel.customWaveCount` entries; unused waves have `enabled == false`.
-    public var waves: [CustomWave]
+    package var waves: [CustomWave]
     /// Always `PresetModel.customShapeCount` entries; unused shapes have `enabled == false`.
-    public var shapes: [CustomShape]
+    package var shapes: [CustomShape]
 
     /// MilkDrop 2 warp shader body (HLSL, without the prelude), or nil.
-    public var warpShader: String?
+    package var warpShader: String?
     /// MilkDrop 2 composite shader body (HLSL, without the prelude), or nil.
-    public var compositeShader: String?
+    package var compositeShader: String?
 
-    public static let customWaveCount = 4
-    public static let customShapeCount = 4
+    package static let customWaveCount = 4
+    package static let customShapeCount = 4
 
-    public init(
+    package init(
         version: Int = 100,
         warpShaderVersion: Int = 0,
         compositeShaderVersion: Int = 0,
@@ -64,41 +64,41 @@ public struct PresetModel: Sendable, Equatable {
     }
 
     /// The numeric setting for `key` (case-insensitive), or nil when the file doesn't set it.
-    public func value(_ key: String) -> Double? {
+    package func value(_ key: String) -> Double? {
         values[key.lowercased()]
     }
 }
 
 /// One of the four custom waves (`wavecode_N_*` settings, `wave_N_*` equations).
-public struct CustomWave: Sendable, Equatable {
+package struct CustomWave: Sendable, Equatable {
     /// `wavecode_N_*` settings with the prefix removed (`enabled`, `samples`, `bspectrum`, `r`, …).
-    public var values: [String: Double]
-    public var initCode: String
-    public var perFrame: String
-    public var perPoint: String
+    package var values: [String: Double]
+    package var initCode: String
+    package var perFrame: String
+    package var perPoint: String
 
-    public init(values: [String: Double] = [:], initCode: String = "", perFrame: String = "", perPoint: String = "") {
+    package init(values: [String: Double] = [:], initCode: String = "", perFrame: String = "", perPoint: String = "") {
         self.values = values
         self.initCode = initCode
         self.perFrame = perFrame
         self.perPoint = perPoint
     }
 
-    public var enabled: Bool { (values["enabled"] ?? 0) != 0 }
+    package var enabled: Bool { (values["enabled"] ?? 0) != 0 }
 }
 
 /// One of the four custom shapes (`shapecode_N_*` settings, `shape_N_*` equations).
-public struct CustomShape: Sendable, Equatable {
+package struct CustomShape: Sendable, Equatable {
     /// `shapecode_N_*` settings with the prefix removed (`enabled`, `sides`, `rad`, `textured`, …).
-    public var values: [String: Double]
-    public var initCode: String
-    public var perFrame: String
+    package var values: [String: Double]
+    package var initCode: String
+    package var perFrame: String
 
-    public init(values: [String: Double] = [:], initCode: String = "", perFrame: String = "") {
+    package init(values: [String: Double] = [:], initCode: String = "", perFrame: String = "") {
         self.values = values
         self.initCode = initCode
         self.perFrame = perFrame
     }
 
-    public var enabled: Bool { (values["enabled"] ?? 0) != 0 }
+    package var enabled: Bool { (values["enabled"] ?? 0) != 0 }
 }

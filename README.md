@@ -6,7 +6,7 @@ and any macOS app can use it.
 
 The full design spec is [docs/handoff.md](docs/handoff.md).
 
-> **Status: milestones 1–5.** MilkDrop 1 and 2 presets render: the expression language (EEL), per-frame and
+> **Status: 1.0.** MilkDrop 1 and 2 presets render: the expression language (EEL), per-frame and
 > per-vertex equations, audio analysis, the warp mesh and feedback, all eight built-in waveforms, custom waves and
 > shapes (instanced and textured), motion vectors, borders, the composite, and MilkDrop 2 warp and composite shaders
 > translated from HLSL to Metal at load, with blur and noise textures. Presets blend into each other with MilkDrop 2's
@@ -26,7 +26,7 @@ Add the package to `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/brennanMKE/MilkDropMetalKit.git", branch: "main"),
+    .package(url: "https://github.com/brennanMKE/MilkDropMetalKit.git", from: "1.0.0"),
 ],
 targets: [
     .target(name: "MyApp", dependencies: [
@@ -35,7 +35,8 @@ targets: [
 ]
 ```
 
-Depend on a tagged version once 1.0 ships.
+`MilkMetal` is the only library product. From 1.0.0 the package follows [Semantic Versioning](https://semver.org)
+([docs/api-1.0.md §5](docs/api-1.0.md#5-semver-policy)).
 
 ## Usage
 
@@ -63,22 +64,27 @@ time. The renderer paces fed audio itself: an `AVAudioEngine` tap's ~100 ms buff
 each frame analyzes the audio that should be playing at its `time` (the visuals trail the feed by up to one buffer).
 If audio stops arriving, the last window holds for a quarter of a second and then decays to silence, so there's no
 need to feed silence while paused. Errors are MilkMetal's own: `MilkRendererError` from creating a renderer or
-view, and `MilkPresetError` (which names the file) from `MilkPreset(contentsOf:)`. To draw into your own Metal layer, call `render(to:commandBuffer:time:)` with the drawable's texture. The
+view, and `MilkPresetError` (which names the file) from `MilkPreset(contentsOf:)`. A host that keeps presets in its
+own storage can parse them with `MilkPreset(text:name:)` or `MilkPreset(data:name:)`, and `isMilkDrop2` tells the
+two generations apart, e.g. for a browser. To draw into your own Metal layer, call `render(to:commandBuffer:time:)` with the drawable's texture. The
 texture's pixel format must equal the renderer's `pixelFormat`, and you must commit every command buffer you pass:
 the renderer keeps up to three frames in flight and waits for one to complete, so an uncommitted buffer stalls the
 main thread a few frames later.
 
 ## Modules
 
-| Product | Role | Status |
-|---|---|---|
-| `MilkMetal` | `MilkRenderer`, `MilkPreset`, `MilkView`, audio input and analysis | Working: the full MilkDrop 1 and 2 frame |
-| `MilkPresetFormat` | `.milk` → `PresetModel` (settings, equations, shader bodies). No Metal. | Working |
-| `MilkEEL` | ns-eel2 expression language → slot-resolved closure tree | Working: full function set, `megabuf`, loops |
-| `MilkShaders` (internal) | MilkDrop 2 HLSL → Metal translator and the shader prelude | Working ([docs/shaders.md](docs/shaders.md)) |
-| `milkconvert` | Host CLI: check presets, translate shaders, write `.milkpreset` bundles | Working: `inspect`, `shaders`, `convert` |
-| `milkview-demo` | `MilkView` in a window, offscreen frames, or a corpus compatibility run, fed by a generated signal | Working ([docs/compatibility.md](docs/compatibility.md): 97.3% of 9,795 presets pass) |
-| `MilkDropGallery` | SwiftUI gallery app: presets by feature, plays an audio file | Working |
+`MilkMetal` is the one library product. The other modules are internal to the package (`package` access), or
+executables.
+
+| Module | Kind | Role | Status |
+|---|---|---|---|
+| `MilkMetal` | Library product | `MilkRenderer`, `MilkPreset`, `MilkView`, audio input and analysis | Working: the full MilkDrop 1 and 2 frame |
+| `MilkPresetFormat` | Internal | `.milk` → `PresetModel` (settings, equations, shader bodies). No Metal. | Working |
+| `MilkEEL` | Internal | ns-eel2 expression language → slot-resolved closure tree | Working: full function set, `megabuf`, loops |
+| `MilkShaders` | Internal | MilkDrop 2 HLSL → Metal translator and the shader prelude | Working ([docs/shaders.md](docs/shaders.md)) |
+| `milkconvert` | Executable product | Host CLI: check presets, translate shaders, write `.milkpreset` bundles | Working: `inspect`, `shaders`, `convert` |
+| `milkview-demo` | Executable | `MilkView` in a window, offscreen frames, or a corpus compatibility run, fed by a generated signal | Working ([docs/compatibility.md](docs/compatibility.md): 97.3% of 9,795 presets pass) |
+| `MilkDropGallery` | Executable | SwiftUI gallery app: presets by feature, plays an audio file | Working |
 
 ## MilkDrop Gallery
 
@@ -128,8 +134,8 @@ projectM (LGPL) or from the 2024 Winamp source release.
 4. **MilkDrop 2 shaders** (done): HLSL → MSL, in the library at load and in `milkconvert` ahead of time, plus blur
    and noise textures.
 5. **Transitions** (done): preset blending and the MilkDrop 2 blend patterns.
-6. **Compatibility**: corpus runs that track a pass rate.
-7. **1.0**: a stable, documented API and a tagged release.
+6. **Compatibility** (done): corpus runs that track a pass rate.
+7. **1.0** (done): a stable, documented API and a tagged release.
 
 The open questions are in [docs/handoff.md §9](docs/handoff.md#9-open-questions-for-the-package-owner).
 

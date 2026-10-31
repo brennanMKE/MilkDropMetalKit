@@ -1,7 +1,7 @@
 import Foundation
 import Metal
-import MilkPresetFormat
-import MilkShaders
+internal import MilkPresetFormat
+internal import MilkShaders
 
 /// Errors from creating a `MilkRenderer` or a `MilkView`.
 ///

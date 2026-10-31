@@ -6,24 +6,24 @@ import Foundation
 /// `sampler_blur1`–`3`, `GetBlur1()`, `q1`–`q32`, `time`, `texsize`, and so on. `ShaderTranslator` translates a body
 /// to Metal Shading Language directly in Swift, at preset load, so user `.milk` files work with no toolchain on
 /// board; `milkconvert` runs the same translator ahead of time to check a pack.
-public enum ShaderStage: String, Sendable, CaseIterable {
+package enum ShaderStage: String, Sendable, CaseIterable {
     case warp
     case composite
 }
 
 /// A preset shader translated to MSL. Compile `metalSource` with `makeLibrary(source:)` and build a pipeline from
 /// `vertexFunction` and `fragmentFunction`; bind resources as `MilkShaderLayout` describes.
-public struct TranslatedShader: Sendable, Equatable {
-    public var stage: ShaderStage
-    public var metalSource: String
-    public var vertexFunction: String
-    public var fragmentFunction: String
+package struct TranslatedShader: Sendable, Equatable {
+    package var stage: ShaderStage
+    package var metalSource: String
+    package var vertexFunction: String
+    package var fragmentFunction: String
     /// The highest blur level the shader reads (0–3); the renderer computes that many.
-    public var blurLevel: Int
+    package var blurLevel: Int
     /// Disk textures the shader names (`sampler_clouds2` → "clouds2"), bound after the standard ones.
-    public var userTextures: [String]
+    package var userTextures: [String]
 
-    public init(stage: ShaderStage, metalSource: String, vertexFunction: String, fragmentFunction: String,
+    package init(stage: ShaderStage, metalSource: String, vertexFunction: String, fragmentFunction: String,
                 blurLevel: Int, userTextures: [String]) {
         self.stage = stage
         self.metalSource = metalSource
@@ -34,9 +34,9 @@ public struct TranslatedShader: Sendable, Equatable {
     }
 }
 
-public enum ShaderTranslator {
+package enum ShaderTranslator {
     /// Translates a preset's warp or composite shader (the text of its `warp_N`/`comp_N` lines).
-    public static func translate(_ hlsl: String, stage: ShaderStage) throws -> TranslatedShader {
+    package static func translate(_ hlsl: String, stage: ShaderStage) throws -> TranslatedShader {
         var preprocessor = try Prelude.preprocessor()
         let tokens = try preprocessor.process(try Lexer.tokenize(hlsl))
         var parser = Parser(tokens: tokens)
@@ -51,61 +51,61 @@ public enum ShaderTranslator {
 }
 
 /// Where the renderer binds what translated shaders read.
-public enum MilkShaderLayout {
+package enum MilkShaderLayout {
     /// Fragment textures 0…9, then user textures from 10.
-    public static let standardTextures = Prelude.standardTextures
-    public static let maxUserTextures = Prelude.maxUserTextures
+    package static let standardTextures = Prelude.standardTextures
+    package static let maxUserTextures = Prelude.maxUserTextures
     /// Fragment buffer 0: `MilkShaderUniforms`. Fragment sampler 0: the main texture's default sampler (filtered;
     /// wrapped or clamped by the preset's `bTexWrap`). Vertex buffer 0 (warp only): the mesh.
-    public static let uniformsIndex = 0
+    package static let uniformsIndex = 0
 }
 
 /// The uniforms translated shaders read, matching `MilkUniforms` in `Prelude`. All `float4`, so the Swift and MSL
 /// layouts agree without padding rules. In the buffer, `MemoryLayout<MilkShaderUniforms>.stride` bytes are followed
 /// by `rotationFloat4Count` float4s: MilkDrop 2's `rot_*` matrices (see `rotationMatrices`).
-public struct MilkShaderUniforms: Sendable {
+package struct MilkShaderUniforms: Sendable {
     /// time, fps, frame, progress
-    public var c0: SIMD4<Float> = .zero
+    package var c0: SIMD4<Float> = .zero
     /// bass, mid, treb, vol
-    public var c1: SIMD4<Float> = .zero
+    package var c1: SIMD4<Float> = .zero
     /// bass_att, mid_att, treb_att, vol_att
-    public var c2: SIMD4<Float> = .zero
+    package var c2: SIMD4<Float> = .zero
     /// aspectx, aspecty (≤ 1), and their inverses
-    public var aspect: SIMD4<Float> = .one
+    package var aspect: SIMD4<Float> = .one
     /// width, height, 1/width, 1/height
-    public var texsize: SIMD4<Float> = .one
+    package var texsize: SIMD4<Float> = .one
     /// q1–q32, four per vector
-    public var q: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>,
+    package var q: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>,
                    SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) = (.zero, .zero, .zero, .zero,
                                                                               .zero, .zero, .zero, .zero)
-    public var randFrame: SIMD4<Float> = .zero
-    public var randPreset: SIMD4<Float> = .zero
-    public var roamCos: SIMD4<Float> = .zero
-    public var roamSin: SIMD4<Float> = .zero
-    public var slowRoamCos: SIMD4<Float> = .zero
-    public var slowRoamSin: SIMD4<Float> = .zero
+    package var randFrame: SIMD4<Float> = .zero
+    package var randPreset: SIMD4<Float> = .zero
+    package var roamCos: SIMD4<Float> = .zero
+    package var roamSin: SIMD4<Float> = .zero
+    package var slowRoamCos: SIMD4<Float> = .zero
+    package var slowRoamSin: SIMD4<Float> = .zero
     /// blur1_min, blur2_min, blur3_min, decay
-    public var blurMin: SIMD4<Float> = .zero
+    package var blurMin: SIMD4<Float> = .zero
     /// blur1_max, blur2_max, blur3_max, 0
-    public var blurMax: SIMD4<Float> = .one
+    package var blurMax: SIMD4<Float> = .one
     /// scale1–3 for GetBlur1–3
-    public var blurScale: SIMD4<Float> = .one
+    package var blurScale: SIMD4<Float> = .one
     /// bias1–3 for GetBlur1–3
-    public var blurBias: SIMD4<Float> = .zero
+    package var blurBias: SIMD4<Float> = .zero
     /// texsize_noise_lq, _lq_lite, _mq, _hq, texsize_noisevol_lq, _hq
-    public var texsizeNoise: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) =
+    package var texsizeNoise: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) =
         (.one, .one, .one, .one, .one, .one)
-    public var texsizeUser: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>,
+    package var texsizeUser: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>,
                              SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) = (.one, .one, .one, .one,
                                                                                       .one, .one, .one, .one)
     /// The composite's corner tints (`hue_shader`): bottom right, bottom left, top right, top left.
-    public var hue: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) = (.one, .one, .one, .one)
+    package var hue: (SIMD4<Float>, SIMD4<Float>, SIMD4<Float>, SIMD4<Float>) = (.one, .one, .one, .one)
 
-    public init() {}
+    package init() {}
 
-    public static let rotationFloat4Count = 96
+    package static let rotationFloat4Count = 96
 
-    public mutating func setQ(_ values: [Double]) {
+    package mutating func setQ(_ values: [Double]) {
         func v(_ i: Int) -> SIMD4<Float> {
             SIMD4((0..<4).map { k in i * 4 + k < values.count ? Float(values[i * 4 + k]) : 0 })
         }
@@ -113,7 +113,7 @@ public struct MilkShaderUniforms: Sendable {
     }
 }
 
-public extension MilkShaderUniforms {
+package extension MilkShaderUniforms {
     /// MilkDrop 2's `rot_s1`…`rot_rand4`: 24 rotations, as float4x3 columns (four float3 columns, padded to float4).
     /// Each group turns about four fixed random axes at its own speed: static, slow, fast, very fast, ultra fast;
     /// the `rand` group is new every frame. MilkDrop's exact rates aren't documented; these are an approximation.
@@ -150,26 +150,26 @@ public extension MilkShaderUniforms {
 }
 
 /// `manifest.json` in a `.milkpreset` bundle.
-public struct BundleManifest: Codable, Sendable {
-    public struct Shader: Codable, Sendable {
-        public var file: String
-        public var blurLevel: Int
-        public var userTextures: [String]
+package struct BundleManifest: Codable, Sendable {
+    package struct Shader: Codable, Sendable {
+        package var file: String
+        package var blurLevel: Int
+        package var userTextures: [String]
 
-        public init(file: String, blurLevel: Int, userTextures: [String]) {
+        package init(file: String, blurLevel: Int, userTextures: [String]) {
             self.file = file
             self.blurLevel = blurLevel
             self.userTextures = userTextures
         }
     }
 
-    public var format = 1
+    package var format = 1
     /// Translated stages by name: "warp", "composite".
-    public var shaders: [String: Shader]
+    package var shaders: [String: Shader]
     /// Stages that didn't translate; the renderer runs its fixed-function pass for them.
-    public var errors: [String]
+    package var errors: [String]
 
-    public init(shaders: [String: Shader], errors: [String]) {
+    package init(shaders: [String: Shader], errors: [String]) {
         self.shaders = shaders
         self.errors = errors
     }

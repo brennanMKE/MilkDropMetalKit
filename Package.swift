@@ -6,8 +6,6 @@ let package = Package(
     platforms: [.macOS(.v14)],
     products: [
         .library(name: "MilkMetal", targets: ["MilkMetal"]),
-        .library(name: "MilkPresetFormat", targets: ["MilkPresetFormat"]),
-        .library(name: "MilkEEL", targets: ["MilkEEL"]),
         .executable(name: "milkconvert", targets: ["milkconvert"]),
     ],
     targets: [

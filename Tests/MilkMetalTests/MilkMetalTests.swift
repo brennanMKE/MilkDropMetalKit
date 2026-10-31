@@ -504,7 +504,7 @@ struct MilkRendererTests {
             warp_1=`shader_body { ret = tex2D(sampler_main, uv).xyz * 0.5 + float3(0, 0.5, 0); }
             comp_1=`shader_body { ret = float3(1, 0, 0) + GetBlur1(uv) * 0 + tex2D(sampler_main, uv).y * 0; }
             """
-        let preset = MilkPreset(name: "shaders", model: try PresetModel(text: text))
+        let preset = try MilkPreset(text: text, name: "shaders")
         let pixels = try render(preset, frames: 3)
         #expect(pixels[2] == 255)  // BGRA: red
         #expect(pixels[1] == 0)
@@ -518,7 +518,7 @@ struct MilkRendererTests {
             comp_1=`shader_body { float z = q1; float n = q2 - 0.25;
             comp_2=`  ret = float3(1 + z / z + (0.5 / z) * q2, exp2(log2(n) * 0.5), pow(n, 0.5)); }
             """
-        let preset = MilkPreset(name: "d3d9", model: try PresetModel(text: text))
+        let preset = try MilkPreset(text: text, name: "d3d9")
         let pixels = try render(preset, frames: 2)
         #expect(pixels[2] == 255, "red: \(pixels[2])")  // BGRA
         #expect((126...129).contains(pixels[1]), "green: \(pixels[1])")
@@ -549,7 +549,7 @@ struct MilkRendererTests {
         let renderer = try MilkRenderer(device: device, pixelFormat: .bgra8Unorm)
         renderer.compilesShadersInBackground = false
         let text = "[preset00]\nwarp_1=`shader_body { ret = nosuch(uv); }"
-        try renderer.load(MilkPreset(name: "bad", model: try PresetModel(text: text)))
+        try renderer.load(MilkPreset(text: text, name: "bad"))
         #expect(renderer.presetErrors.count == 1)
         #expect(renderer.presetErrors.first?.hasPrefix("warp shader") == true)
     }
@@ -585,6 +585,33 @@ struct MilkRendererTests {
         let bundle = folder.appendingPathComponent("hollow.milkpreset")
         try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
         #expect(throws: MilkPresetError.bundleMissingPreset(bundle)) { try MilkPreset(contentsOf: bundle) }
+    }
+
+    /// `MilkPreset(text:name:)` and `(data:name:)` parse from memory; their errors name `<name>.milk`.
+    @Test func presetsParseFromMemory() throws {
+        let text = "[preset00]\nMILKDROP_PRESET_VERSION=201\nzoom=1.01\n"
+        let fromText = try MilkPreset(text: text, name: "memory")
+        #expect(fromText.name == "memory")
+        #expect(fromText.isMilkDrop2)
+        let fromData = try MilkPreset(data: Data("zoom=1.01\n".utf8), name: "bytes")
+        #expect(fromData.name == "bytes")
+        #expect(!fromData.isMilkDrop2)
+        #expect(try MilkPreset(text: "comp_1=`shader_body { ret = 0; }", name: "shader").isMilkDrop2)
+
+        do {
+            _ = try MilkPreset(text: "[preset00]\n\n", name: "blank")
+            Issue.record("empty text parsed")
+        } catch {
+            guard case .empty = error else { Issue.record("\(error)"); return }
+            #expect(error.url.lastPathComponent == "blank.milk")
+        }
+        do {
+            _ = try MilkPreset(data: Data([0xFF, 0xFE, 0x00, 0xD8, 0x00, 0xDC]), name: "binary")
+            Issue.record("binary data parsed")
+        } catch {
+            // Windows-1252 decodes most bytes, so either error is fine as long as it names the preset.
+            #expect(error.url.lastPathComponent == "binary.milk")
+        }
     }
 }
 
@@ -636,7 +663,7 @@ struct TransitionTests {
     }
 
     private func solid(_ rgb: String) throws -> MilkPreset {
-        MilkPreset(name: rgb, model: try PresetModel(text: "[preset00]\ncomp_1=`shader_body { ret = float3(\(rgb)); }"))
+        try MilkPreset(text: "[preset00]\ncomp_1=`shader_body { ret = float3(\(rgb)); }", name: rgb)
     }
 
     /// Renders frames `range` at 60 fps; returns the first pixel (BGRA) of the last.

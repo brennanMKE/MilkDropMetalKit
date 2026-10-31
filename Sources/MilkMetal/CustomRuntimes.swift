@@ -1,6 +1,6 @@
 import Foundation
-import MilkEEL
-import MilkPresetFormat
+internal import MilkEEL
+internal import MilkPresetFormat
 
 /// One custom wave: per-frame code sets its colour and sample count, then per-point code places each sample.
 /// A port of Butterchurn's `CustomWaveform` and the wave half of `PresetEquationRunner`.

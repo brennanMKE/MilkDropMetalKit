@@ -1,6 +1,6 @@
 import Foundation
 
-public enum PresetParseError: Error, Equatable {
+package enum PresetParseError: Error, Equatable {
     /// The data isn't text in any encoding `.milk` files use.
     case unreadableText
     /// The file has no `key=value` lines at all.
@@ -9,18 +9,18 @@ public enum PresetParseError: Error, Equatable {
 
 extension PresetModel {
     /// Reads a `.milk` file. Files from the Winamp era are often Windows-1252, so that is tried after UTF-8.
-    public init(contentsOf url: URL) throws {
+    package init(contentsOf url: URL) throws {
         try self.init(data: Data(contentsOf: url))
     }
 
-    public init(data: Data) throws {
+    package init(data: Data) throws {
         guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .windowsCP1252) else {
             throw PresetParseError.unreadableText
         }
         try self.init(text: text)
     }
 
-    public init(text: String) throws {
+    package init(text: String) throws {
         var parser = Parser()
         var sawKey = false
         // Split on any newline flavour; `.milk` files use CRLF.

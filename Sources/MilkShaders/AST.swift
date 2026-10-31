@@ -1,12 +1,12 @@
 import Foundation
 
 /// A failure translating a preset shader. The renderer falls back to its fixed-function pass and reports it.
-public enum ShaderError: Error, Equatable, CustomStringConvertible {
+package enum ShaderError: Error, Equatable, CustomStringConvertible {
     case syntax(String, Int)
     case semantic(String, Int)
     case unsupported(String)
 
-    public var description: String {
+    package var description: String {
         switch self {
         case .syntax(let message, let line): "line \(line): \(message)"
         case .semantic(let message, let line): "line \(line): \(message)"

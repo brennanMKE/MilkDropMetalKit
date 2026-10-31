@@ -1,7 +1,7 @@
 import Foundation
 import Metal
-import MilkPresetFormat
-import MilkShaders
+internal import MilkPresetFormat
+internal import MilkShaders
 
 /// A preset's MilkDrop 2 shaders, translated and compiled into pipelines. A stage whose shader is missing or fails
 /// to translate or compile is nil, and the renderer runs its fixed-function pass instead.

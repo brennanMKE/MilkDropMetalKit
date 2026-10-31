@@ -1,8 +1,8 @@
 # 1.0 API review
 
 Milestone 7 (handoff §6): a stable, documented API and a tagged release that Roadie can depend on. This page stages
-that decision for the owner. The non-breaking documentation items are applied (marked **Done** below), as are F2
-and F5, which the owner approved as breaking changes before 1.0; everything else is still a proposal awaiting the
+that decision for the owner. The non-breaking documentation items are applied (marked **Done** below), as are F1,
+F2 and F5, which the owner approved as breaking changes before 1.0; everything else is still a proposal awaiting the
 owner's decision.
 
 Reviewed at `ce8d9c1` (M5 transitions committed) plus the uncommitted M6 compatibility runner, 2026-10-29. The
@@ -15,6 +15,12 @@ public symbols were listed with `swift-symbolgraph-extract -minimum-access-level
 
 Library products (`Package.swift:7-11`): `MilkMetal`, `MilkPresetFormat`, `MilkEEL`. Executable product:
 `milkconvert`. `MilkShaders`, `CMilkAtomics` and `MilkDemoSupport` are targets, not products.
+
+> **Since F1 (2026-10-30):** `MilkMetal` is the only library product. `MilkPresetFormat`, `MilkEEL` and
+> `MilkShaders` have `package` access only, so their tables below describe package-internal API. `MilkPreset` is now
+> `name`, `isMilkDrop2`, `init(text:name:)`, `init(data:name:)` and `init(contentsOf:)`, all three inits
+> `throws(MilkPresetError)`. Re-checked with `swift-symbolgraph-extract`: no public MilkMetal symbol names a type
+> from another module of the package.
 
 A dash marks a public symbol with no doc comment.
 
@@ -37,7 +43,7 @@ A dash marks a public symbol with no doc comment.
 | `render(to:commandBuffer:time:)` | func | `:270` |
 | `reset()` | func | Back to a new renderer's state (feedback, clock, audio, random sequence, transition); the preset stays loaded and restarts. Added 2026-10-29 |
 | `MilkRendererError` | enum | `unsupportedPixelFormat(MTLPixelFormat)`, `noCommandQueue`, `pipelineCompilation(function:message:)`, `resourceCreation(resource:)` (F2) |
-| `MilkPreset` | `Sendable` struct | `name`, `model: PresetModel` (both — no doc), `init(name:model:)` (—), `init(contentsOf:) throws(MilkPresetError)` (`.milk` or `.milkpreset` bundle) |
+| `MilkPreset` | `Sendable` struct | `name`, `isMilkDrop2`, `init(text:name:)`, `init(data:name:)`, `init(contentsOf:)`, each init `throws(MilkPresetError)` (`.milk` or `.milkpreset` bundle). `model` and `init(name:model:)` are `package` since F1 |
 | `MilkPresetError` | enum | `unreadableFile(URL, reason:)`, `unreadableText(URL)`, `empty(URL)`, `bundleMissingPreset(URL)`; `url` (F2) |
 | `MilkTransitionPattern` | `Sendable, CaseIterable` enum | `random`, `crossfade`, `wipe`, `plasma`, `radial` (`Transitions.swift:5`) |
 | `MilkView` | `@MainActor final class: NSView` | `renderer` (—), `init(renderer:frame:) throws(MilkRendererError)` (—), and four `NSView` overrides |
@@ -128,6 +134,12 @@ Then `internal import MilkPresetFormat`/`MilkEEL`/`MilkShaders`/`CMilkAtomics` i
 interface (see F13). Adding the products back in 1.x is additive. Removing them after 1.0 is not.
 *Alternative:* keep `MilkPresetFormat` as a read-only parser product (`public internal(set)` on every property, plus
 doc comments). Drop `MilkEEL` regardless.
+*Status:* **Done (2026-10-30, owner decision: the proposal).** Only `MilkMetal` is a library product; `milkconvert`
+stays an executable product. Every `public` in `MilkPresetFormat`, `MilkEEL` and `MilkShaders` is `package`.
+`MilkPreset` has the members above; the inits use typed throws, and for `text:`/`data:` the error's URL is a
+placeholder, `<name>.milk`. No other accessor was added: `.milk` files have no author or notes fields.
+MilkMetal imports `MilkEEL`, `MilkShaders` and `CMilkAtomics` with `internal import`, and `MilkPresetFormat` with
+`package import` in `MilkPreset.swift` (where `package let model` needs it), `internal import` elsewhere.
 
 **F2. Make the error types stable and descriptive.** (`MilkRenderer.swift:6-10`, `MilkView.swift:5-7`,
 `MilkPreset.swift:5-8`, `PresetParser.swift:3-8`)
@@ -301,6 +313,8 @@ symbols (wait on F1), the DocC catalog, and `MilkView` docs beyond F7.
 **F13.** `internal import` (Swift 6 access-level imports) for `CMilkAtomics` (`AudioRing.swift:1`), `MilkShaders` and,
 after F1, `MilkPresetFormat`/`MilkEEL`. Today, loading MilkMetal's module needs `CMilkAtomics`'s module map:
 `swift-symbolgraph-extract` failed without it.
+*Status:* **Done with F1** (see there). `swift-symbolgraph-extract` still needs `CMilkAtomics`'s module map
+(`-Xcc -fmodule-map-file=…`): SwiftPM builds without library evolution, so the module still records the import.
 **F14.** `MilkTransitionPattern: String` raw values (`"random"`, `"wipe"`, …) so hosts can persist a preference. The
 demo already matches on `"\($0)"` (`milkview-demo/main.swift:89`).
 **F15.** `MilkPreset: Hashable` (by name and model), useful for a browser's selection.
@@ -331,15 +345,16 @@ Items 1, 2 and 4 are **done** in the README's Usage section.
 6. The pass rates (99.8% of equations, 99.97% of 15,895 shaders) come from the M2/M4 corpus runs. They aren't
    reproducible from the repo, since `Corpus/` is git-ignored. Fine as stated, but say which pack and date, and
    replace them with M6's render pass rate when it lands.
-7. The Modules table lists `MilkPresetFormat` and `MilkEEL` as products. Update it if F1 is taken.
+7. The Modules table lists `MilkPresetFormat` and `MilkEEL` as products. Update it if F1 is taken. **Done.**
 8. Installation: switch to `from: "1.0.0"` at the tag (§6). Drop "Depend on a tagged version once 1.0 ships".
+   **Done.**
 9. Not in the README yet: `milkview-demo compat` and `run-tests-vm.sh --corpus`. The M6 agent is adding them.
 
 ### Other docs
 
 - `docs/handoff.md` §4 is the pre-build spec: a `Sources/MilkPreset/` target, a non-isolated `MilkRenderer`,
   "Status: not started". Add a line at the top saying the shipped API is in this page and the README, so nobody
-  takes §4 as current.
+  takes §4 as current. **Done.**
 - `docs/handoff.md` §9 open questions: three are now answered in code (8-bit feedback, `MilkRenderer.swift:63`;
   runtime translator shipped; macOS only). Record the answers. iOS stays open; adding it later is additive.
 - `docs/compatibility.md` is referenced by `milkview-demo/main.swift:25` but doesn't exist yet (M6).
@@ -452,18 +467,21 @@ explained in that release's notes.
 
 Owner approval is needed for the items marked ✱.
 
-1. ✱ Decide F1–F5 (F2–F5 done; F1 open), and land the accepted fixes plus F10 (it changes a type) in `Sources/` once the M5 and M6 agents
+1. ✱ Decide F1–F5 (all done; F1 on 2026-10-30), and land the accepted fixes plus F10 (it changes a type) in `Sources/` once the M5 and M6 agents
    are done.
 2. Doc comments on every public symbol (F12). `swift build` is clean with no warnings. Re-run
-   `swift-symbolgraph-extract` and check the inventory in §1 against the result.
+   `swift-symbolgraph-extract` and check the inventory in §1 against the result. **Build and symbol check done
+   (2026-10-30):** no warnings; the §1 note lists the shipped `MilkPreset`.
 3. VM: `scripts/run-tests-vm.sh` on a clean tree, with all tests passing including M5's transition tests (run ID
    recorded). Also run `--frames --preset Presets/echo.milk --next Presets/shader-glow.milk` and look at the frames.
 4. VM: M6 compatibility run over the corpus (`--corpus Corpus/…`). Record the pack, preset count, pass rate, failure
    breakdown and median/p99 frame times in `CHANGELOG.md` under 1.0.0 and in `docs/compatibility.md`.
 5. README: the edits in §4, the Versioning section from §5, Installation switched to
    `.package(url: "https://github.com/brennanMKE/MilkDropMetalKit.git", from: "1.0.0")`, and status "1.0".
-6. `CHANGELOG.md`: change "Unreleased" to `1.0.0 – <date>` and fill in the M6 numbers.
-7. `scripts/build-app.sh:20`: `VERSION="1.0.0"` (it's `0.1.0` now), so the Gallery DMG name matches the tag.
+   **Done** (Installation, Modules table, status and roadmap).
+6. `CHANGELOG.md`: change "Unreleased" to `1.0.0 – <date>` and fill in the M6 numbers. **Done** (1.0.0 —
+   2026-10-30).
+7. `scripts/build-app.sh:20`: `VERSION="1.0.0"`, so the Gallery DMG name matches the tag. **Done.**
 8. Commit, then ✱ `git tag -a 1.0.0 -m "MilkDropMetalKit 1.0.0"` and `git push origin main 1.0.0`. Use no `v`
    prefix: SwiftPM resolves either, and the README will say `from: "1.0.0"`.
 9. Check from a scratch package that depends on `from: "1.0.0"` that it resolves and builds (a host build only, no

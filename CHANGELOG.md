@@ -4,10 +4,10 @@ All notable changes to MilkDropMetalKit. The format follows [Keep a Changelog](h
 and from 1.0.0 the package follows [Semantic Versioning](https://semver.org) as described in
 [docs/api-1.0.md §5](docs/api-1.0.md#5-semver-policy).
 
-## Unreleased: 1.0.0
+## 1.0.0 — 2026-10-30
 
-The first tagged release. `MilkRenderer`, `MilkPreset`, `MilkView` and `MilkTransitionPattern` make up the stable
-API. Requires macOS 14 and Swift 6. No third-party dependencies, no network access, no entitlements.
+The first tagged release. `MilkMetal` is the only library product: `MilkRenderer`, `MilkPreset`, `MilkView` and
+`MilkTransitionPattern` make up the stable API. Requires macOS 14 and Swift 6. No third-party dependencies, no network access, no entitlements.
 
 ### Added
 
@@ -71,8 +71,14 @@ API. Requires macOS 14 and Swift 6. No third-party dependencies, no network acce
   window screenshots, screen recordings, a Gallery app check, corpus runs and transition captures (`--next`).
 - `milkview-demo`: `MilkView` in a window, or offscreen frames, fed by a generated test signal. Plays nothing.
 
-### Changed (breaking, before 1.0; [api-1.0.md](docs/api-1.0.md) F2 and F5)
+### Changed (breaking, before 1.0; [api-1.0.md](docs/api-1.0.md) F1, F2 and F5)
 
+- **`MilkMetal` is the only library product** (F1). The `MilkPresetFormat` and `MilkEEL` products are removed; the
+  targets remain, with `package` access, for `MilkMetal`, `milkconvert` and the tests. `MilkPreset.model` and
+  `MilkPreset(name:model:)` are no longer public, so MilkMetal's API names no type from those modules. In their
+  place: `MilkPreset(text:name:)` and `MilkPreset(data:name:)` parse a preset from memory (both
+  `throws(MilkPresetError)`; the error's URL is a placeholder, `<name>.milk`), and `isMilkDrop2` tells a MilkDrop 2
+  preset from a MilkDrop 1 one.
 - **Errors.** `MilkViewError` is gone: `MilkView.init` throws `MilkRendererError.noCommandQueue`, as
   `MilkRenderer.init` now does. `MilkRendererError.unsupportedPixelFormat` carries the `MTLPixelFormat`, not its raw
   value; `shaderCompilation(String)` became `pipelineCompilation(function:message:)` and `resourceCreation(String)`
